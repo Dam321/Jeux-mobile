@@ -1,5 +1,5 @@
 // Formules de combat partagées (moteur visuel + simulateur d'équilibrage)
-import { SKILL_BY_ID, PET_BY_ID, skillLevelMult, petLevelMult } from './stats.js';
+import { SKILL_BY_ID, kittenStats, skillLevelMult } from './stats.js';
 
 export const BASE_INTERVAL = 1.0;
 
@@ -29,14 +29,15 @@ export function equippedSkills(st, slots) {
   }
   return out;
 }
-export function equippedPets(st, slots) {
+export function equippedKittens(st, slots) {
   const out = [];
   for (let i = 0; i < slots; i++) {
-    const id = st.pets.equipped[i];
-    if (id && st.pets.owned[id]) out.push({ ...PET_BY_ID[id], lvl: st.pets.owned[id].lvl, lm: petLevelMult(st.pets.owned[id].lvl) });
+    const id = st.kittens.equipped[i];
+    if (id && st.kittens.owned[id]) { const ks = kittenStats(st, id); out.push({ ...ks.k, lvl: st.kittens.owned[id].lvl, mult: ks.atkMult, lm: 1 }); }
   }
   return out;
 }
+export const equippedPets = equippedKittens;
 
 // Simulation rapide (sans visuel) d'un combat : joueur vs vagues d'ennemis.
 // enemies : [[{hp,atk,def,interval,boss}...], ...]

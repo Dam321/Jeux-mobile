@@ -1,417 +1,486 @@
-// Moteur de combat temps réel (visuel) — campagne, donjons, tour, arène
-import * as THREE from 'three';
-import { CatModel, EnemyModel, PetModel } from './three/models.js';
-import { castSkill, petShot } from './three/skillfx.js';
+// =====================================================================
+//  Combat 2D temps réel (vue de côté) : campagne, donjons, tour, arène,
+//  Guerre des Gouttières. Deux camps : 0 = Minou + chatons, 1 = ennemis
+//  (ou chat rival + ses chatons en PvP).
+// =====================================================================
+import { CatRig } from './gfx/cat.js';
+import { enemySprite, ENEMY_INFO } from './gfx/enemies.js';
+import { buildScenery, drawScenery, drawSceneryFront } from './gfx/scenery.js';
+import { FX } from './gfx/fx.js';
+import { GROUND_Y, drawSprite, ell, rgba, glow, OUT } from './gfx/draw.js';
+import { castSkill, kittenAttack, heroBasicAttack, meleeImpactFx, enemyAttack, hurtFx } from './gfx/skills.js';
 import { hitDamage, attackInterval } from './combat.js';
+import { ENEMY_RANGED, ELEMENTS } from './content.js';
 import { fmt } from './util.js';
 import { sfx } from './audio.js';
 
-const CAT_X = -2.7, CAT_Z = 0.35;
-const PET_POS = [[-3.6, 1.45], [-3.85, -0.85], [-4.5, 0.4]];
-const CAT_YAW = Math.PI / 2 - 0.55;
-const ENEMY_YAW = -Math.PI / 2 + 0.55;
+const HERO_X = 118;
+const KIT_OFF = [[-40, 10], [-64, -6], [-20, 16], [-86, 4], [24, 18]];
+const AMBIENT = {
+  petals: ['#ffb3d1', '#ffffff'], leaves: ['#ff8c2b', '#ffc23d', '#e85a1f'], bubbles: ['#bff4ff'], snow: ['#ffffff'],
+  fireflies: ['#ff4fd8', '#3ff5ff', '#ffe14d'], embers: ['#ff7a2f', '#ffd23f'], stars: ['#ffffff', '#c77dff'], rain: ['#9fc6e8'],
+};
 
-function slotPos(i, n, boss) {
-  if (boss && n === 1) return [-0.55, 0.3];
-  const col = Math.floor(i / 2), row = i % 2;
-  return [-1.35 + col * 1.25 + row * 0.35, row ? -0.65 : 0.85];
+const rigCache = new Map();
+function rigFor(key, make) {
+  if (!rigCache.has(key)) { rigCache.set(key, make()); if (rigCache.size > 60) rigCache.delete(rigCache.keys().next().value); }
+  return rigCache.get(key);
 }
 
 export class Battle {
-  constructor(world, fx, game, barsLayer) {
-    this.world = world;
-    this.fx = fx;
+  constructor(stage, game) {
+    this.stage = stage;
     this.game = game;
-    this.bars = barsLayer;
-    this.enemies = [];
-    this.pets = [];
+    this.fx = new FX();
+    this.units = [];
     this.timers = [];
     this.speed = 1;
     this.phase = 'idle';
     this.phaseT = 0;
-    this.mode = 'campaign';
-    this.player = { model: new CatModel('tabby'), hp: 100, maxHp: 100, shield: 0, atkT: 0, buff: 0, buffT: 0, anim: 'idle', animK: 0, animT: 0 };
-    const pm = this.player.model.root;
-    pm.position.set(CAT_X, 0, CAT_Z);
-    pm.rotation.y = CAT_YAW;
-    world.scene.add(pm);
-    this.player.bar = this.makeBar(true);
-    this.skillCd = [];
-    this.tmp = { x: 0, y: 0 };
+    this.scroll = 0;
+    this.flashA = 0; this.flashC = '#ffffff';
+    this.stopT = 0;
+    this.wave = 0;
+    this.time = 0;
   }
 
-  makeBar(isPlayer) {
-    const el = document.createElement('div');
-    el.className = 'hpbar' + (isPlayer ? ' me' : '');
-    el.innerHTML = '<i class="sh"></i><i class="fill"></i><b></b>';
-    this.bars.appendChild(el);
-    return { el, fill: el.children[1], sh: el.children[0], lbl: el.children[2], last: -1 };
+  setScenery(id, seed = 1) {
+    if (this.sceneKey === id + seed) return;
+    this.sceneKey = id + seed;
+    this.sc = buildScenery(id, seed);
+  }
+  get viewW() { return this.stage.viewW; }
+  heroX() { return Math.max(HERO_X, Math.min(170, this.viewW * 0.31)); }
+
+  // ------------------------------------------------------------- création des unités
+  makeHero(def, side) {
+    const key = JSON.stringify([def.appearance, def.gear]);
+    const rig = rigFor(key, () => new CatRig(def.appearance, def.gear));
+    const u = {
+      side, kind: 'hero', rig, x: side ? this.viewW - this.heroX() : this.heroX(), y: GROUND_Y, facing: side ? -1 : 1, scale: 0.86,
+      stats: def.stats, hp: def.stats.hp, maxHp: def.stats.hp, shield: 0, atkT: 0.3, anim: 'idle', animK: 0, flash: 0,
+      dead: false, deadT: 0, stun: 0, buff: 0, buffT: 0, name: def.name || 'Minou', style: rig.style, weaponColor: def.weaponColor || '#ffffff',
+      skills: def.skills || [], cds: (def.skills || []).map((s) => s.cd * 0.35), perks: def.perks || {}, revived: false, dash: 0, height: 110,
+    };
+    u.kittens = (def.kittens || []).map((k, i) => this.makeKitten(k, u, i));
+    return u;
+  }
+  makeKitten(k, owner, i) {
+    const rig = rigFor('k_' + k.id, () => new CatRig({ ...k.look }, k.look.wings ? { wings: { base: k.look.wings, r: Math.max(4, k.r) } } : {}, { baby: true }));
+    const off = KIT_OFF[i % KIT_OFF.length];
+    return {
+      side: owner.side, kind: 'kitten', rig, owner, id: k.id, el: k.el, r: k.r, mult: k.mult, name: k.name,
+      ox: off[0], oy: off[1], x: owner.x + off[0] * owner.facing, y: GROUND_Y + off[1], facing: owner.facing, scale: 0.46,
+      t: 1 + i * 0.6, ultT: 8 + i * 2, anim: 'idle', animK: 0, flash: 0, height: 46, dead: false,
+    };
+  }
+  makeEnemy(d, i, n) {
+    const boss = d.boss, elite = d.elite;
+    const sc = (boss ? 1.75 : elite ? 1.3 : 1) * 0.88;
+    const hx = this.heroX();
+    const slotX = boss && n === 1 ? hx + 150 : hx + 100 + i * 36;
+    const info = ENEMY_INFO[d.kind] || { h: 80 };
+    return {
+      side: 1, kind: 'enemy', ekind: d.kind, def: d, x: this.viewW + 40 + i * 46, tx: Math.min(slotX, this.viewW - 50), y: GROUND_Y + (i % 2 ? -8 : 7),
+      facing: -1, scale: sc, stats: { atk: d.atk, def: d.def, crit: 0, critDmg: 50, dodge: 0 }, hp: d.hp, maxHp: d.hp, atkT: d.interval * (0.3 + Math.random() * 0.5),
+      interval: d.interval, anim: 'run', animK: 0, flash: 0, dead: false, deadT: 0, stun: 0, boss, elite, name: d.name, arrived: false,
+      height: info.h * sc, ranged: ENEMY_RANGED[d.kind] || null, t: Math.random() * 10,
+    };
   }
 
-  // ------------------------------------------------------------- configuration du joueur
-  setPlayer(stats, skills, pets, skinId, gear) {
-    const P = this.player;
-    const ratio = P.maxHp ? P.hp / P.maxHp : 1;
-    P.stats = stats;
-    P.maxHp = stats.hp;
-    P.hp = Math.min(stats.hp, Math.max(1, ratio * stats.hp));
-    if (P.model.skinId !== skinId) P.model.setLook(skinId, gear);
-    else P.model.setGear(gear);
-    // compétences
-    const old = Object.fromEntries((this.skills || []).map((s, i) => [s.id, this.skillCd[i]]));
-    this.skills = skills;
-    this.skillCd = skills.map((s) => old[s.id] ?? s.cd * 0.4);
-    // compagnons
-    const ids = pets.map((p) => p.id).join(',');
-    if (ids !== this.petIds) {
-      for (const p of this.pets) this.world.scene.remove(p.model.root);
-      this.pets = pets.map((p, i) => {
-        const m = new PetModel(p.id);
-        m.root.position.set(PET_POS[i][0], 0, PET_POS[i][1]);
-        m.root.rotation.y = CAT_YAW;
-        this.world.scene.add(m.root);
-        return { def: p, model: m, t: 1 + i * 0.7, animK: 1 };
-      });
-      this.petIds = ids;
-    } else this.pets.forEach((p, i) => { p.def = pets[i]; });
+  setPlayer(def) {
+    this.playerDef = def;
+    const h = this.hero;
+    if (!h) return;
+    const key = JSON.stringify([def.appearance, def.gear]);
+    h.rig = rigFor(key, () => new CatRig(def.appearance, def.gear));
+    h.style = h.rig.style;
+    h.weaponColor = def.weaponColor;
+    const ratio = h.maxHp ? h.hp / h.maxHp : 1;
+    h.stats = def.stats; h.maxHp = def.stats.hp; h.hp = Math.max(1, Math.min(h.maxHp, ratio * h.maxHp));
+    h.perks = def.perks || {};
+    const old = Object.fromEntries(h.skills.map((s, i) => [s.id, h.cds[i]]));
+    h.skills = def.skills; h.cds = def.skills.map((s) => old[s.id] ?? s.cd * 0.4);
+    const ids = def.kittens.map((k) => k.id).join();
+    if (ids !== h.kittens.map((k) => k.id).join()) {
+      this.units = this.units.filter((u) => !(u.kind === 'kitten' && u.owner === h));
+      h.kittens = def.kittens.map((k, i) => this.makeKitten(k, h, i));
+      this.units.push(...h.kittens);
+    } else h.kittens.forEach((k, i) => { k.mult = def.kittens[i].mult; });
   }
 
-  // ------------------------------------------------------------- démarrage des rencontres
-  clearEnemies() {
-    for (const e of this.enemies) { this.world.scene.remove(e.model.root); e.bar.el.remove(); }
-    this.enemies = [];
-  }
+  // ------------------------------------------------------------- rencontres
   start(enc) {
-    // enc : { mode, waves, title, rival?, onEnd(win), keepHp }
-    this.clearEnemies();
-    this.timers = [];
     this.enc = enc;
     this.mode = enc.mode;
-    this.wave = 0;
+    this.timers = [];
     this.fx.clear();
-    const P = this.player;
-    if (!enc.keepHp) { P.hp = P.maxHp; P.shield = 0; }
-    P.dead = false;
-    P.anim = 'idle';
-    this.skillCd = this.skills.map((s) => s.cd * 0.35);
-    this.setPhase('walk');
+    this.wave = 0;
+    this.units = [];
+    const keepHp = enc.keepHp && this.hero && !this.hero.dead ? this.hero.hp / this.hero.maxHp : 1;
+    this.hero = this.makeHero(this.playerDef, 0);
+    this.hero.hp = this.hero.maxHp * keepHp;
+    this.units.push(this.hero, ...this.hero.kittens);
+    this.rival = null;
+    if (enc.rival) {
+      this.rival = this.makeHero(enc.rival, 1);
+      this.units.push(this.rival, ...this.rival.kittens);
+      this.setPhase('intro');
+      sfx('thunder');
+    } else this.setPhase('walk');
     this.game.onEncounterStart && this.game.onEncounterStart(enc);
   }
   setPhase(p) { this.phase = p; this.phaseT = 0; }
-
   spawnWave() {
     const defs = this.enc.waves[this.wave];
-    const n = defs.length;
-    defs.forEach((d, i) => {
-      let model;
-      if (d.rival) {
-        model = new CatModel(d.skin || 'tabby', d.gear || {});
-        model.height = 2;
-      } else model = new EnemyModel(d.kind, { boss: d.boss, elite: d.elite });
-      const [sx, sz] = slotPos(i, n, d.boss || d.rival);
-      model.root.position.set(8.5 + i * 0.9, 0, sz);
-      model.root.rotation.y = ENEMY_YAW;
-      this.world.scene.add(model.root);
-      const e = { def: d, model, hp: d.hp, maxHp: d.hp, tx: d.rival ? -0.4 : sx, arrived: false, atkT: d.interval * (0.3 + Math.random() * 0.5), stun: 0, anim: 'run', animK: 0, dead: false, deadT: 0, bar: this.makeBar(false), boss: d.boss, rival: d.rival, skT: 4 };
-      if (d.boss || d.rival) e.bar.el.classList.add('boss');
-      if (d.elite) e.bar.el.classList.add('elite');
-      this.enemies.push(e);
-    });
-    const boss = defs.find((d) => d.boss || d.rival);
-    this.game.onBoss && this.game.onBoss(boss ? { name: boss.name || 'Boss', hp: 1 } : null);
-    if (boss) { sfx('thunder'); this.fx.flash('#ff2a3d', 0.25); this.world.shake = 0.6; }
+    defs.forEach((d, i) => this.units.push(this.makeEnemy(d, i, defs.length)));
+    const boss = defs.find((d) => d.boss);
+    this.game.onBoss && this.game.onBoss(boss ? { name: boss.name || 'Boss' } : null);
+    if (boss) { sfx('thunder'); this.flash('#ff2a3d', 0.25); this.shake(0.6); this.game.onBanner && this.game.onBanner('BOSS', boss.name, 'boss'); }
   }
 
-  targets() {
-    const a = this.enemies.filter((e) => !e.dead && e.arrived);
-    a.sort((x, y) => x.model.root.position.x - y.model.root.position.x);
+  // ------------------------------------------------------------- API pour les effets
+  foes(u) {
+    const side = u.side;
+    const a = this.units.filter((x) => x.side !== side && !x.dead && x.kind !== 'kitten' && (x.kind !== 'enemy' || x.arrived));
+    const ux = u.x;
+    a.sort((p, q) => Math.abs(p.x - ux) - Math.abs(q.x - ux));
     return a;
   }
-
-  later(delay, fn) { this.timers.push({ t: delay, fn }); }
-
-  say(ent, txt, cls) {
-    const p = ent.model.root.position.clone();
-    p.y += (ent.model.height || 2) + 0.6;
-    this.fx.text(p, txt, cls);
+  later(t, fn) { this.timers.push({ t, fn }); }
+  shake(a) { this.stage.shake = Math.max(this.stage.shake, a); }
+  flash(c, a) { this.flashC = c; this.flashA = Math.max(this.flashA, a); }
+  zoom(z, x, y) { this.stage.zoom = Math.max(this.stage.zoom, z); if (x != null) this.stage.focus = [x, y]; }
+  stop(t) { this.stopT = Math.max(this.stopT, t); }
+  center(u) { const h = u.height * (u.kind === 'kitten' ? 1 : 1); return [u.x + (u.dash || 0) * u.facing, u.y - h * (u.kind === 'enemy' ? 0.45 : 0.42)]; }
+  head(u) { if (u.kind === 'enemy') return this.center(u); const [ex, ey] = u.rig.eyePos; return [u.x + ((u.dash || 0) + ex * u.scale) * u.facing, u.y + ey * u.scale]; }
+  hand(u) { const [hx, hy] = u.rig.handPos; return [u.x + ((u.dash || 0) + hx * u.scale) * u.facing, u.y + hy * u.scale]; }
+  say(u, txt, style) { const [x] = this.center(u); this.fx.text(x, u.y - u.height - 18, txt, style); }
+  cutin(u, sk) { if (u.side === 0 && this.game.onCutin) this.game.onCutin(sk); }
+  heal(u, pct, silent) {
+    const amt = u.maxHp * pct;
+    u.hp = Math.min(u.maxHp, u.hp + amt);
+    if (!silent) this.fx.text(u.x, u.y - u.height - 6, '+' + fmt(amt), 'heal');
   }
+  shield(u, pct) { u.shield = u.maxHp * pct; }
+  buff(u, v, d) { u.buff = v; u.buffT = d; }
 
-  // ------------------------------------------------------------- dégâts
-  hit(e, mult, o = {}) {
-    if (e.dead) return;
-    const S = this.player.stats;
-    const atk = S.atk * (1 + this.player.buff);
-    let dmg = hitDamage(atk, e.def.def) * mult;
+  // dégâts : att = unité qui attaque (héros, ennemi) ; tgt = cible
+  hit(att, tgt, mult, o = {}) {
+    if (!tgt || tgt.dead || !att) return null;
+    const S = att.stats;
+    const T = tgt.stats;
+    if (tgt.kind === 'hero' && o.basic && Math.random() * 100 < (T.dodge || 0)) { this.say(tgt, 'ESQUIVE', 'miss'); return null; }
+    let dmg = hitDamage(S.atk * (1 + (att.buff || 0)), T.def || 0) * mult;
     let crit = false;
-    if (!o.noCrit && Math.random() * 100 < S.crit) { crit = true; dmg *= 1 + S.critDmg / 100; }
-    if (o.skill && !o.pet) dmg *= 1 + S.skillDmg / 100;
-    if (e.boss || e.rival) dmg *= 1 + S.bossDmg / 100;
+    if (!o.noCrit && Math.random() * 100 < (S.crit || 0)) { crit = true; dmg *= 1 + (S.critDmg || 50) / 100; }
+    if (o.skill && !o.pet) dmg *= 1 + (S.skillDmg || 0) / 100;
+    if ((tgt.boss || tgt.kind === 'hero') && att.kind === 'hero') dmg *= 1 + (S.bossDmg || 0) / 100;
     dmg *= 0.92 + Math.random() * 0.16;
-    e.hp -= dmg;
-    e.model.flash(crit ? 0xffe08a : 0xffffff, 0.1);
-    if (e.anim !== 'attack') { e.anim = 'hit'; e.animK = 0; }
-    const p = e.model.root.position.clone();
-    p.y += e.model.height * 0.75;
-    this.fx.text(p, (crit ? '💥' : '') + fmt(dmg), crit ? 'crit' : o.skill ? 'skill' : 'dmg');
-    if (!o.skill && S.lifesteal > 0) this.heal((dmg * S.lifesteal) / 100 / this.player.maxHp, true);
-    if (e.hp <= 0) this.kill(e);
+    if (tgt.shield > 0) { const a = Math.min(tgt.shield, dmg); tgt.shield -= a; dmg -= a; }
+    tgt.hp -= dmg;
+    tgt.flash = 1; tgt.flashColor = crit ? '#ffe08a' : tgt.side === 0 ? '#ff4d5e' : '#ffffff';
+    if (tgt.anim !== 'attack' && tgt.anim !== 'cast' && tgt.kind !== 'kitten') { tgt.anim = 'hurt'; tgt.animK = 0; }
+    const [x] = this.center(tgt);
+    const ty = tgt.y - tgt.height * 0.8;
+    if (dmg > 0) this.fx.text(x, ty, fmt(dmg), tgt.side === 0 ? (crit ? 'hurt' : 'hurt') : crit ? 'crit' : o.pet ? 'pet' : o.skill ? 'skill' : 'dmg');
+    if (crit && tgt.side === 1) { this.shake(0.25); this.stop(0.035); }
+    if (o.basic && att.kind === 'hero' && S.lifesteal > 0) this.heal(att, (dmg * S.lifesteal) / 100 / att.maxHp, true);
+    if (o.basic && att.kind === 'hero' && Math.random() * 100 < (S.stun || 0) && !tgt.boss) { tgt.stun = 1.2; this.say(tgt, 'ÉTOURDI', 'tag'); }
+    if (tgt.side === 0) hurtFx(this, tgt);
+    if (tgt.kind === 'hero' && o.basic && !tgt.dead && Math.random() * 100 < (T.counter || 0)) {
+      this.later(0.12, () => { if (!att.dead && !tgt.dead) { this.say(tgt, 'RIPOSTE', 'tag'); this.hit(tgt, att, 1, {}); meleeImpactFx(this, tgt, att, false); } });
+    }
+    if (tgt.hp <= 0) this.kill(tgt);
     return { dmg, crit };
   }
-
-  kill(e) {
-    e.dead = true;
-    e.anim = 'dead'; e.animK = 0; e.deadT = 0;
-    const p = e.model.root.position.clone().setY(0.6);
-    this.fx.burst(p, { count: e.boss ? 80 : 26, color: ['#ffffff', '#ffe08a', '#c9cbd8'], speed: e.boss ? 8 : 5, size: e.boss ? 0.45 : 0.3, life: 0.6, up: 1.5 });
-    this.fx.burst(p, { count: 8, color: '#ffd23f', speed: 4, size: 0.25, life: 0.9, shape: 1, gravity: 5, up: 3 });
-    if (e.boss) { this.world.shake = 1.2; this.fx.flash('#ffffff', 0.5); this.fx.ring(p.clone().setY(0.05), '#ffd23f', { r1: 5 }); }
-    this.game.onKill && this.game.onKill(e, this.world.project(p, { x: 0, y: 0 }));
-    sfx('coin');
-  }
-
-  heal(pct, silent) {
-    const P = this.player;
-    const amt = P.maxHp * pct;
-    P.hp = Math.min(P.maxHp, P.hp + amt);
-    if (!silent) {
-      const p = P.model.root.position.clone(); p.y += 2.3;
-      this.fx.text(p, '+' + fmt(amt), 'heal');
-    }
-  }
-  addShield(pct) {
-    const P = this.player;
-    P.shield = P.maxHp * pct;
-    if (!P.shieldMesh) P.shieldMesh = this.fx.shield(P.model.root);
-    P.shieldMesh.visible = true;
-  }
-  buff(v, dur) { this.player.buff = v; this.player.buffT = dur; }
-
-  hurtPlayer(e, mult = 1) {
-    const P = this.player;
-    if (P.dead) return;
-    const S = P.stats;
-    if (Math.random() * 100 < S.dodge) {
-      this.say(P, 'ESQUIVE', 'miss');
+  kill(u) {
+    if (u.kind === 'hero' && u.perks.revive && !u.revived) {
+      u.revived = true; u.hp = u.maxHp * 0.5;
+      this.fx.pillar(u.x, { color: '#ffb52e', width: 50, dur: 1.2, y: u.y });
+      this.fx.burst(u.x, u.y - 60, { count: 60, color: ['#ffd23f', '#ff7a1a', '#ffffff'], speed: 200, up: 120, size: 10, life: 1.1, shape: 'star' });
+      this.say(u, 'RENAISSANCE !', 'big'); sfx('legendary');
       return;
     }
-    let dmg = hitDamage(e.def.atk, S.def) * mult * (0.92 + Math.random() * 0.16);
-    let ecrit = false;
-    if (e.rival && Math.random() * 100 < (e.def.crit || 10)) { dmg *= 1 + (e.def.critDmg || 50) / 100; ecrit = true; }
-    if (P.shield > 0) {
-      const a = Math.min(P.shield, dmg);
-      P.shield -= a; dmg -= a;
-      if (P.shield <= 0 && P.shieldMesh) { P.shieldMesh.visible = false; this.fx.burst(P.model.root.position.clone().setY(1), { count: 30, color: '#7fd8ff', speed: 5, size: 0.2, life: 0.5 }); }
-    }
-    P.hp -= dmg;
-    P.model.flash(0xff4d5e, 0.12);
-    const p = P.model.root.position.clone(); p.y += 1.9;
-    if (dmg > 0) this.fx.text(p, '-' + fmt(dmg), ecrit ? 'hurt crit' : 'hurt');
-    this.fx.burst(P.model.root.position.clone().setY(1), { count: 8, color: ['#ff4d5e', '#ffffff'], speed: 3, size: 0.18, life: 0.3 });
-    sfx('enemyHit');
-    if (Math.random() * 100 < S.counter) {
-      this.later(0.12, () => { if (!e.dead && !P.dead) { this.say(P, 'RIPOSTE', 'tag'); this.hit(e, 1); this.fx.slash(e.model.root.position.clone().setY(1), '#ffb52e', { scale: 1 }); } });
-    }
-    if (P.hp <= 0) {
-      P.hp = 0;
-      P.dead = true;
-      P.anim = 'dead'; P.animK = 0;
-      sfx('defeat');
-      this.setPhase('defeat');
+    u.dead = true; u.hp = 0;
+    u.anim = 'dead'; u.animK = 0; u.deadT = 0;
+    const [x, y] = this.center(u);
+    if (u.kind === 'enemy') {
+      this.fx.burst(x, y, { count: u.boss ? 70 : 22, color: ['#ffffff', '#ffe08a', '#d8d0ff'], speed: u.boss ? 320 : 180, size: u.boss ? 12 : 8, life: 0.6, up: 60 });
+      this.fx.burst(x, y, { count: 8, color: '#ffd23f', speed: 140, size: 8, life: 0.9, shape: 'star', gravity: 300, up: 120 });
+      this.fx.burst(x, u.y - 10, { count: 6, color: '#d8d0ff', speed: 40, size: 18, endSize: 34, life: 0.8, shape: 'smoke' });
+      if (u.boss) { this.shake(1.2); this.flash('#ffffff', 0.5); this.fx.ring(x, u.y, { r1: 160, color: '#ffd23f' }); this.stop(0.12); this.zoom(1.08, x, y); }
+      this.game.onKill && this.game.onKill(u, this.stage.toCss(x, y));
+      sfx('coin');
+    } else if (u.kind === 'hero') {
+      this.fx.burst(x, y, { count: 40, color: ['#ffffff', '#ffd6f5'], speed: 200, size: 9, life: 0.8, shape: 'star' });
+      sfx(u.side === 0 ? 'defeat' : 'victory');
+      if (u.side === 0) this.setPhase('defeat');
+      else { this.shake(1); this.stop(0.15); this.zoom(1.1, x, y); }
     }
   }
 
-  playerAttack(tg) {
-    const P = this.player;
-    P.anim = 'attack'; P.animK = 0;
-    this.later(0.12, () => {
-      if (tg.dead) { tg = this.targets()[0]; if (!tg) return; }
-      const p = tg.model.root.position.clone(); p.y += Math.min(1.2, tg.model.height * 0.55);
-      const r = this.hit(tg, 1);
-      this.fx.slash(p, r && r.crit ? '#ffd23f' : '#ffffff', { scale: r && r.crit ? 1.5 : 1.1 });
-      this.fx.burst(p, { count: r && r.crit ? 18 : 8, color: r && r.crit ? ['#ffd23f', '#ffffff'] : ['#ffffff', '#ffe9c4'], speed: r && r.crit ? 7 : 4, size: 0.2, life: 0.3 });
-      if (r && r.crit) { this.world.shake = Math.max(this.world.shake, 0.35); sfx('crit'); } else sfx('hit');
-      const S = P.stats;
-      if (!tg.dead && Math.random() * 100 < S.stun) { tg.stun = 1.2; this.say(tg, 'ÉTOURDI', 'tag'); }
-      if (Math.random() * 100 < S.combo) {
-        this.later(0.16, () => {
-          const t2 = tg.dead ? this.targets()[0] : tg;
-          if (!t2) return;
-          this.say(P, 'COMBO', 'tag');
-          const p2 = t2.model.root.position.clone(); p2.y += 0.9;
-          this.hit(t2, 1);
-          this.fx.slash(p2, '#7fe9ff', { rz: 1.2, scale: 1.2 });
-          sfx('hit');
-        });
+  // ------------------------------------------------------------- IA des héros (joueur et rival)
+  heroAct(u, dt) {
+    if (u.dead) return;
+    if (u.buffT > 0) { u.buffT -= dt; if (u.buffT <= 0) u.buff = 0; if (Math.random() < 0.25) { const [x, y] = this.center(u); this.fx.emit(x + (Math.random() - 0.5) * 40, y + (Math.random() - 0.5) * 50, 0, -40, '#ffd23f', 7, 0.6, { shape: 'star' }); } }
+    if (u.stun > 0) { u.stun -= dt; return; }
+    const foes = this.foes(u);
+    if (!foes.length) return;
+    const tg = foes[0];
+    const S = u.stats;
+    u.atkT += dt;
+    const iv = attackInterval(S);
+    if (u.atkT >= iv && u.anim !== 'cast') {
+      u.atkT = 0;
+      u.anim = 'attack'; u.animK = 0;
+      const melee = u.style === 'slash' || u.style === 'smash';
+      if (melee && this.rival) u.dashTo = Math.max(0, Math.abs(tg.x - u.x) - 70);
+      const strike = (target, second) => {
+        if (!target || target.dead) { target = this.foes(u)[0]; if (!target) return; }
+        const r = this.hit(u, target, 1, { basic: true });
+        if (melee || u.style === 'pierce') meleeImpactFx(this, u, target, r && r.crit);
+        if (r && r.crit) sfx('crit'); else sfx('hit');
+        if (!second && u.perks.double && Math.random() < 0.12) this.later(0.12, () => { this.say(u, 'DOUBLE !', 'tag'); strike(target, true); });
+        if (!second && Math.random() * 100 < (S.combo || 0)) this.later(0.16, () => { this.say(u, 'COMBO', 'tag'); strike(target, true); });
+      };
+      heroBasicAttack(this, u, tg, () => strike(tg, false));
+    }
+    for (let i = 0; i < u.skills.length; i++) {
+      u.cds[i] -= dt;
+      if (u.cds[i] <= 0) {
+        const sk = u.skills[i];
+        if (sk.type === 'heal' && u.hp / u.maxHp > 0.75 && sk.id !== 'ninelives') continue;
+        if (castSkill(this, u, sk)) {
+          u.cds[i] = sk.cd;
+          u.anim = 'cast'; u.animK = 0;
+          if (u.side === 0 && this.game.onSkillCast) this.game.onSkillCast(i);
+        }
       }
-    });
+    }
+  }
+  kittenAct(k, dt) {
+    const o = k.owner;
+    k.facing = o.facing;
+    const tx = o.x + k.ox * o.facing, ty = GROUND_Y + k.oy;
+    k.x += (tx - k.x) * Math.min(1, dt * 4);
+    k.y += (ty - k.y) * Math.min(1, dt * 4);
+    k.anim = o.anim === 'run' ? 'run' : k.anim === 'attack' ? 'attack' : 'idle';
+    if (o.dead || this.phase !== 'fight') return;
+    const foes = this.foes(o);
+    if (!foes.length) return;
+    k.t -= dt;
+    if (k.t <= 0) {
+      k.t = 2.2;
+      k.anim = 'attack'; k.animK = 0;
+      kittenAttack(this, k, foes[0], k.mult, false);
+    }
+    if (k.r >= 5) {
+      k.ultT -= dt;
+      if (k.ultT <= 0) { k.ultT = 12; kittenAttack(this, k, foes[0], k.mult, true); }
+    }
+  }
+  enemyAct(e, dt) {
+    if (e.dead) return;
+    e.t += dt;
+    if (!e.arrived) {
+      e.x -= dt * (e.boss ? 80 : 110);
+      e.anim = 'run';
+      if (e.x <= e.tx) { e.x = e.tx; e.arrived = true; e.anim = 'idle'; }
+      return;
+    }
+    if (e.stun > 0) { e.stun -= dt; e.anim = 'stun'; return; }
+    if (e.anim === 'stun') e.anim = 'idle';
+    e.atkT += dt;
+    if (e.atkT >= e.interval) {
+      e.atkT = 0;
+      e.anim = 'attack'; e.animK = 0;
+      const tg = this.hero;
+      if (!tg || tg.dead) return;
+      enemyAttack(this, e, tg, e.ranged, () => { if (!e.dead && !tg.dead) { this.hit(e, tg, 1, { basic: true }); sfx('enemyHit'); } });
+    }
   }
 
   // ------------------------------------------------------------- boucle
   update(rawDt) {
+    this.time += rawDt;
+    if (this.flashA > 0) this.flashA = Math.max(0, this.flashA - rawDt * 2.2);
+    if (this.stopT > 0) { this.stopT -= rawDt; this.fx.update(rawDt * 0.1); return; }
     const dt = rawDt * this.speed;
-    const P = this.player;
     this.phaseT += dt;
-    // minuteries
     for (let i = this.timers.length - 1; i >= 0; i--) {
       const t = this.timers[i];
       t.t -= dt;
       if (t.t <= 0) { this.timers.splice(i, 1); t.fn(); }
     }
-    if (P.buffT > 0) { P.buffT -= dt; if (P.buffT <= 0) P.buff = 0; if (Math.random() < 0.3) this.fx.sparkle(P.model.root.position.clone().setY(1.2), '#ffd23f', 1, 0.3, 1.4); }
-
+    const H = this.hero;
     switch (this.phase) {
-      case 'walk': {
-        this.world.scrollSpeed = 4.2;
-        P.anim = 'run';
-        if (this.phaseT > (this.wave === 0 ? 0.9 : 1.1)) { this.spawnWave(); this.setPhase('fight'); }
+      case 'intro':
+        if (this.phaseT > 1.3) this.setPhase('fight');
         break;
-      }
+      case 'walk':
+        this.scroll += dt * 150;
+        H.anim = 'run';
+        if (this.phaseT > (this.wave === 0 ? 0.8 : 1)) { this.spawnWave(); H.anim = 'idle'; this.setPhase('fight'); }
+        break;
       case 'fight': {
-        const anyArrived = this.enemies.some((e) => e.arrived && !e.dead);
-        this.world.scrollSpeed = anyArrived ? 0 : Math.max(0, this.world.scrollSpeed - dt * 6);
-        if (!anyArrived && P.anim === 'run' && this.world.scrollSpeed <= 0) P.anim = 'idle';
-        if (P.dead) break;
-        // attaque de base
-        const tg = this.targets();
-        const S = P.stats;
-        if (tg.length) {
-          P.atkT += dt;
-          const iv = attackInterval(S);
-          if (P.atkT >= iv) { P.atkT = 0; this.playerAttack(tg[0]); }
-          // compétences
-          for (let i = 0; i < this.skills.length; i++) {
-            this.skillCd[i] -= dt;
-            if (this.skillCd[i] <= 0) {
-              const sk = this.skills[i];
-              if (sk.type === 'heal' && P.hp / P.maxHp > 0.75 && sk.id !== 'ninelives') continue;
-              if (castSkill(this, sk)) {
-                this.skillCd[i] = sk.cd;
-                P.anim = 'cast'; P.animK = 0;
-                this.game.onSkillCast && this.game.onSkillCast(i);
-              }
-            }
+        const anyArrived = this.units.some((u) => u.kind === 'enemy' && u.arrived && !u.dead);
+        if (!anyArrived && !this.rival) this.scroll += dt * 40;
+        this.heroAct(H, dt);
+        if (this.rival) this.heroAct(this.rival, dt);
+        for (const u of this.units) if (u.kind === 'enemy') this.enemyAct(u, dt);
+        if (!this.rival) {
+          const es = this.units.filter((u) => u.kind === 'enemy');
+          if (es.length && es.every((e) => e.dead && e.deadT > 0.5)) {
+            this.units = this.units.filter((u) => u.kind !== 'enemy');
+            this.wave++;
+            if (this.wave >= this.enc.waves.length) { this.setPhase('victory'); sfx('victory'); this.game.onBoss && this.game.onBoss(null); }
+            else { this.heal(H, 0.25, true); this.setPhase('walk'); }
           }
-          // compagnons
-          for (const pet of this.pets) {
-            pet.t -= dt;
-            if (pet.t <= 0) {
-              pet.t = 2.2;
-              pet.animK = 0;
-              petShot(this, pet.def, pet.model, tg[0], pet.def.mult * pet.def.lm);
-            }
-          }
-        }
-        // ennemis
-        for (const e of this.enemies) {
-          if (e.dead) continue;
-          const pos = e.model.root.position;
-          if (!e.arrived) {
-            pos.x -= dt * (e.boss ? 2.6 : 3.4);
-            e.anim = 'run';
-            if (pos.x <= e.tx) { pos.x = e.tx; e.arrived = true; e.anim = 'idle'; }
-            continue;
-          }
-          if (e.stun > 0) { e.stun -= dt; e.anim = 'stun'; if (Math.random() < 0.2) this.fx.sparkle(pos.clone().setY(e.model.height + 0.2), '#ffd23f', 1, 0.25, 0.6); continue; }
-          if (e.anim === 'stun') e.anim = 'idle';
-          e.atkT += dt;
-          if (e.atkT >= e.def.interval) {
-            e.atkT = 0;
-            e.anim = 'attack'; e.animK = 0;
-            this.later(0.15, () => { if (!e.dead) this.hurtPlayer(e); });
-          }
-          if (e.rival) {
-            e.skT -= dt;
-            if (e.skT <= 0) {
-              e.skT = 6;
-              const pp = P.model.root.position.clone();
-              this.fx.lightning(new THREE.Vector3(pp.x, 9, pp.z - 1), pp.clone().setY(0.3), '#ff4d5e');
-              this.fx.blast(pp.clone().setY(0.8), '#ff4d5e', { r1: 1.6 });
-              this.world.shake = 0.6;
-              sfx('thunder');
-              this.hurtPlayer(e, 2.5);
-            }
-          }
-        }
-        // fin de vague ?
-        if (this.enemies.length && this.enemies.every((e) => e.dead && e.deadT > 0.45)) {
-          this.clearEnemies();
-          this.wave++;
-          if (this.wave >= this.enc.waves.length) {
-            this.setPhase('victory');
-            sfx('victory');
-            this.game.onBoss && this.game.onBoss(null);
-          } else {
-            this.heal(0.25, true);
-            this.setPhase('walk');
-          }
-        }
-        if (this.enc.timeLimit && this.phase === 'fight') {
+        } else if (this.rival.dead && this.phase === 'fight') { this.setPhase('victory'); }
+        if (this.enc.timeLimit) {
           this.enc.elapsed = (this.enc.elapsed || 0) + dt;
-          if (this.enc.elapsed > this.enc.timeLimit) { P.hp = 0; P.dead = true; P.anim = 'dead'; P.animK = 0; this.setPhase('defeat'); }
+          if (this.enc.elapsed > this.enc.timeLimit && !H.dead) { H.dead = true; H.anim = 'dead'; H.animK = 0; this.setPhase('defeat'); }
         }
         break;
       }
-      case 'victory': {
-        P.anim = 'idle';
-        this.world.scrollSpeed = 0;
-        if (this.phaseT === dt) this.fx.burst(P.model.root.position.clone().setY(2.2), { count: 30, color: ['#ffd23f', '#ffffff', '#ff7ae0'], speed: 4, up: 3, size: 0.25, life: 1, shape: 1, gravity: 3 });
-        if (this.phaseT > 0.9) { this.setPhase('idle'); this.game.onEncounterEnd(true, this.enc); }
+      case 'victory':
+        if (this.phaseT === dt) this.fx.burst(H.x, H.y - 150, { count: 30, color: ['#ffd23f', '#ffffff', '#ff7ae0'], speed: 160, up: 100, size: 9, life: 1, shape: 'star', gravity: 200 });
+        H.anim = H.anim === 'attack' ? H.anim : 'idle';
+        if (this.phaseT > 1) { this.setPhase('idle'); this.game.onEncounterEnd(true, this.enc); }
         break;
-      }
-      case 'defeat': {
-        this.world.scrollSpeed = 0;
-        if (this.phaseT > 1.6) { this.setPhase('idle'); this.clearEnemies(); this.game.onEncounterEnd(false, this.enc); }
+      case 'defeat':
+        if (this.phaseT > 1.6) { this.setPhase('idle'); this.game.onEncounterEnd(false, this.enc); }
         break;
-      }
-      default: this.world.scrollSpeed = 0; break;
+      default: break;
     }
-
     // animations
-    this.animate(P, rawDt, dt);
-    for (const e of this.enemies) {
-      this.animate(e, rawDt, dt);
-      if (e.dead) {
-        e.deadT += dt;
-        if (e.deadT > 0.45) e.model.root.visible = false;
+    for (const u of this.units) {
+      if (u.kind === 'kitten') this.kittenAct(u, dt);
+      if (u.flash > 0) u.flash = Math.max(0, u.flash - dt * 6);
+      if (['attack', 'hurt', 'cast'].includes(u.anim)) {
+        u.animK += dt * (u.anim === 'cast' ? 2.4 : u.anim === 'attack' && u.kind === 'hero' ? 2.8 : 4.5);
+        if (u.animK >= 1) { u.anim = u.dead ? 'dead' : 'idle'; u.animK = 0; }
+      } else if (u.anim === 'dead') { u.animK = Math.min(1, u.animK + dt * 2.5); u.deadT += dt; }
+      if (u.kind === 'hero') {
+        const want = u.anim === 'attack' && u.dashTo ? Math.sin(Math.min(1, u.animK) * Math.PI) * u.dashTo : 0;
+        u.dash = want;
       }
+      if (u.rig) u.rig.update(dt);
     }
-    for (const pet of this.pets) {
-      pet.animK = Math.min(1, pet.animK + dt * 3);
-      pet.model.update(dt, pet.animK);
+    this.fx.update(dt);
+    // particules d'ambiance
+    if (this.sc && Math.random() < dt * 6) {
+      const cols = AMBIENT[this.sc.ambient] || AMBIENT.petals;
+      const a = this.sc.ambient;
+      const x = Math.random() * this.viewW;
+      if (a === 'snow' || a === 'petals' || a === 'leaves' || a === 'rain') this.fx.emit(x, -10, -20 - Math.random() * 20, 30 + Math.random() * 30, cols[Math.floor(Math.random() * cols.length)], a === 'snow' ? 3.5 : 4.5, 6, { shape: a === 'leaves' || a === 'petals' ? 'debris' : 'glow', drag: 0, alpha: 0.85 });
+      else if (a === 'bubbles') this.fx.emit(x, 360, 0, -40, cols[0], 5, 5, { shape: 'bubble', drag: 0, alpha: 0.7 });
+      else if (a === 'embers') this.fx.emit(x, 330, (Math.random() - 0.5) * 20, -50 - Math.random() * 40, cols[Math.floor(Math.random() * 2)], 3, 3.5, { drag: 0 });
+      else this.fx.emit(x, 60 + Math.random() * 220, (Math.random() - 0.5) * 10, -8, cols[Math.floor(Math.random() * cols.length)], 3.5, 3, { shape: a === 'stars' ? 'star' : 'glow', drag: 0 });
     }
-    if (P.shieldMesh && P.shieldMesh.visible) { P.shieldMesh.rotation.y += dt; P.shieldMesh.material.uniforms.uO.value = 0.6 + Math.sin(this.world.time * 6) * 0.2; }
-    this.updateBars();
   }
 
-  animate(ent, rawDt, dt) {
-    if (['attack', 'hit', 'cast'].includes(ent.anim)) {
-      ent.animK += dt * (ent.anim === 'cast' ? 2.5 : 4.5);
-      if (ent.animK >= 1) { ent.anim = ent.dead ? 'dead' : 'idle'; ent.animK = 0; }
-    } else if (ent.anim === 'dead') ent.animK = Math.min(1, ent.animK + dt * 2.5);
-    ent.model.update(dt, ent.anim, ent.animK);
-  }
-
-  updateBars() {
-    const list = [this.player, ...this.enemies];
-    for (const ent of list) {
-      const b = ent.bar;
-      const vis = ent === this.player ? !ent.dead : !ent.dead && ent.model.root.position.x < 7;
-      if (!vis) { if (b.el.style.display !== 'none') b.el.style.display = 'none'; continue; }
-      if (b.el.style.display === 'none') b.el.style.display = '';
-      const p = ent.model.root.position;
-      const v = new THREE.Vector3(p.x, (ent.model.height || 2) + (ent === this.player ? 0.45 : 0.3), p.z);
-      this.world.project(v, this.tmp);
-      b.el.style.transform = `translate(${this.tmp.x.toFixed(1)}px, ${this.tmp.y.toFixed(1)}px)`;
-      const max = ent.maxHp || 1;
-      const r = Math.max(0, ent.hp / max);
-      if (Math.abs(r - b.last) > 0.002) { b.fill.style.transform = `scaleX(${r})`; b.last = r; }
-      if (ent === this.player) {
-        const s = Math.min(1, ent.shield / max);
-        b.sh.style.transform = `scaleX(${s})`;
+  // ------------------------------------------------------------- rendu
+  render(dt) {
+    const ctx = this.stage.begin(dt);
+    const W = this.viewW;
+    if (this.sc) drawScenery(ctx, this.sc, this.scroll, W);
+    else { ctx.fillStyle = '#6fc8ff'; ctx.fillRect(0, 0, W, 360); }
+    this.fx.drawItems(ctx, 'back');
+    // auras au sol
+    for (const u of this.units) {
+      if (u.dead && u.kind !== 'hero') continue;
+      if (u.kind === 'enemy' && (u.boss || u.elite)) {
+        ctx.save(); ctx.globalCompositeOperation = 'lighter';
+        ell(ctx, u.x, u.y, 34 * u.scale, 8 * u.scale); ctx.strokeStyle = rgba(u.boss ? '#ff2a3d' : '#ff9d00', 0.55 + Math.sin(this.time * 5) * 0.2); ctx.lineWidth = 3; ctx.stroke();
+        ctx.restore();
+      }
+      if (u.kind === 'kitten' && u.r >= 3) {
+        ctx.save(); ctx.globalCompositeOperation = 'lighter';
+        glow(ctx, u.x, u.y - 2, 18 + u.r * 2, ELEMENTS[u.el].color, 0.35 + Math.sin(this.time * 4 + u.ox) * 0.1);
+        ctx.restore();
       }
     }
-    // barre du boss
-    const boss = this.enemies.find((e) => (e.boss || e.rival) && !e.dead);
-    if (boss && this.game.onBoss) this.game.onBossHp && this.game.onBossHp(Math.max(0, boss.hp / boss.maxHp), boss.hp);
+    const order = this.units.slice().sort((a, b) => a.y - b.y);
+    for (const u of order) this.drawUnit(ctx, u);
+    this.fx.drawItems(ctx, 'front');
+    this.fx.drawParticles(ctx);
+    if (this.sc) drawSceneryFront(ctx, this.sc, this.scroll, W);
+    for (const u of order) this.drawBar(ctx, u);
+    this.fx.drawTexts(ctx);
+    if (this.phase === 'intro') this.drawVersus(ctx);
+    if (this.flashA > 0.01) {
+      ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = rgba(this.flashC, this.flashA * 0.7); ctx.fillRect(0, 0, this.stage.canvas.width, this.stage.canvas.height);
+      ctx.restore();
+    }
+  }
+  drawUnit(ctx, u) {
+    if (u.kind === 'hero' || u.kind === 'kitten') {
+      const x = u.x + (u.dash || 0) * u.facing;
+      const st = u.stun > 0 ? 'hurt' : u.anim;
+      u.rig.draw(ctx, x, u.y, u.scale, u.facing, { state: st, k: u.animK, flash: u.flash, flashColor: u.flashColor });
+      if (u.shield > 0 && !u.dead) {
+        ctx.save(); ctx.globalCompositeOperation = 'lighter';
+        const [cx, cy] = this.center(u);
+        ell(ctx, cx, cy, 52, 70); ctx.strokeStyle = rgba('#7fd8ff', 0.6 + Math.sin(this.time * 6) * 0.2); ctx.lineWidth = 3; ctx.stroke();
+        glow(ctx, cx, cy, 70, '#7fd8ff', 0.18);
+        ctx.restore();
+      }
+      return;
+    }
+    // ennemi
+    const frame = u.anim === 'run' ? Math.floor(u.t * 6) % 2 : Math.floor(u.t * 2.2) % 2;
+    const spr = enemySprite(u.ekind, frame);
+    let x = u.x, y = u.y, sx = u.scale, sy = u.scale, rot = 0, alpha = 1;
+    if (u.anim === 'run') y -= Math.abs(Math.sin(u.t * 10)) * 4 * u.scale;
+    else if (u.anim === 'attack') { const a = Math.sin(Math.min(1, u.animK) * Math.PI); x -= a * (u.ranged ? 4 : 18); sx *= 1 + a * 0.06; sy *= 1 - a * 0.06; }
+    else if (u.anim === 'hurt') { const a = Math.sin(Math.min(1, u.animK) * Math.PI); x += a * 7; rot = a * 0.08; }
+    else if (u.anim === 'dead') { const a = Math.min(1, u.animK); sy *= 1 - a * 0.7; sx *= 1 + a * 0.3; alpha = 1 - a; }
+    else { const b = Math.sin(u.t * 3); sy *= 1 + b * 0.025; sx *= 1 - b * 0.012; }
+    if (u.stun > 0) rot = Math.sin(u.t * 18) * 0.08;
+    if (alpha <= 0.01) return;
+    ctx.fillStyle = 'rgba(20,8,40,0.26)'; ell(ctx, u.x, u.y, 26 * u.scale, 6 * u.scale); ctx.fill();
+    drawSprite(ctx, spr, x, y, sx, sy, rot, alpha);
+    if (u.boss && !u.dead) this.drawCrown(ctx, x, y - u.height - 4, u.scale);
+    if (u.flash > 0) { ctx.save(); ctx.globalCompositeOperation = 'lighter'; glow(ctx, x, y - u.height * 0.45, u.height * 0.6, u.flashColor || '#ffffff', u.flash * 0.75); ctx.restore(); }
+    if (u.stun > 0) for (let i = 0; i < 3; i++) { const a = u.t * 5 + i * 2.1; this.fx.emit(x + Math.cos(a) * 16, y - u.height - 6 + Math.sin(a) * 4, 0, 0, '#ffd23f', 5, 0.05, { shape: 'star' }); }
+  }
+  drawCrown(ctx, x, y, s) {
+    ctx.save(); ctx.translate(x, y); ctx.scale(s * 0.55, s * 0.55);
+    ctx.beginPath(); ctx.moveTo(-16, 6); ctx.lineTo(-18, -10); ctx.lineTo(-8, -2); ctx.lineTo(0, -14); ctx.lineTo(8, -2); ctx.lineTo(18, -10); ctx.lineTo(16, 6); ctx.closePath();
+    ctx.fillStyle = '#ffcc33'; ctx.fill(); ctx.lineWidth = 2.6; ctx.strokeStyle = OUT; ctx.stroke();
+    ctx.fillStyle = '#ff2a3d'; ctx.beginPath(); ctx.arc(0, 1, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+  drawBar(ctx, u) {
+    if (u.dead || u.kind === 'kitten' || (u.kind === 'enemy' && (!u.arrived && u.x > this.viewW - 10))) return;
+    if (u.boss) return;
+    const w = u.kind === 'hero' ? 56 : 40, h = u.kind === 'hero' ? 7 : 5.5;
+    const x = u.x + (u.dash || 0) * u.facing - w / 2, y = u.y - u.height - (u.kind === 'hero' ? 12 : 8);
+    ctx.fillStyle = '#1a0d2e'; ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x - 1.5, y - 1.5, w + 3, h + 3, 4) : ctx.rect(x - 1.5, y - 1.5, w + 3, h + 3); ctx.fill();
+    const r = Math.max(0, u.hp / u.maxHp);
+    const g = ctx.createLinearGradient(0, y, 0, y + h);
+    if (u.side === 0) { g.addColorStop(0, '#8dffad'); g.addColorStop(1, '#1fa35c'); } else if (u.elite) { g.addColorStop(0, '#ffc07a'); g.addColorStop(1, '#d65a00'); } else { g.addColorStop(0, '#ff8590'); g.addColorStop(1, '#d62839'); }
+    ctx.fillStyle = g; ctx.fillRect(x, y, w * r, h);
+    if (u.shield > 0) { ctx.fillStyle = 'rgba(160,235,255,0.85)'; ctx.fillRect(x, y, w * Math.min(1, u.shield / u.maxHp), h * 0.45); }
+    if (u.kind === 'hero' && this.rival) {
+      ctx.font = '11px "Lilita One", system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.lineWidth = 3; ctx.strokeStyle = OUT; ctx.fillStyle = u.side ? '#ffd6da' : '#e6ffe9';
+      ctx.strokeText(u.name, x + w / 2, y - 7); ctx.fillText(u.name, x + w / 2, y - 7);
+    }
+  }
+  drawVersus(ctx) {
+    const k = Math.min(1, this.phaseT / 0.35);
+    const W = this.viewW;
+    ctx.save();
+    ctx.translate(W / 2, 150);
+    ctx.scale(2.4 - k * 1.4, 2.4 - k * 1.4);
+    ctx.globalAlpha = Math.min(1, k * 1.5) * (this.phaseT > 1.05 ? Math.max(0, 1 - (this.phaseT - 1.05) * 4) : 1);
+    ctx.font = '54px "Lilita One", system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.lineWidth = 10; ctx.strokeStyle = '#2b1838'; ctx.strokeText('VS', 0, 0);
+    const g = ctx.createLinearGradient(0, -24, 0, 24); g.addColorStop(0, '#fff6b0'); g.addColorStop(1, '#ff5ca8');
+    ctx.fillStyle = g; ctx.fillText('VS', 0, 0);
+    ctx.restore();
   }
 }

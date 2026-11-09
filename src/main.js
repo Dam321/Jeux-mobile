@@ -1,39 +1,37 @@
 import './styles.css';
-import { World } from './three/world.js';
-import { FX } from './three/fx.js';
-import { renderSnapshots } from './three/snap.js';
+import { Stage } from './gfx/stage.js';
 import { Battle } from './battle.js';
 import { UI } from './ui/ui.js';
-import { h, fmt, fmtTime, dayKey, randi } from './util.js';
+import { h, fmt, fmtTime, dayKey, pick } from './util.js';
 import { icon } from './ui/icons.js';
 import { initAudio, sfx, setSound, setMusic } from './audio.js';
 import { loadState, saveState, ensureDaily, defaultState, makeBots, wipeSave } from './state.js';
-import { computeStats, statsFromPower, SKIN_BY_ID, itemPower } from './stats.js';
+import { computeStats, statsFromPower, itemPower, kittenStats, skillLevelMult, SKILL_BY_ID } from './stats.js';
 import {
-  openBoxes, gainHeroXp, boxUpgradeInfo, summonSkills, summonPets, levelUp, canLevel, autoEquipSkills, autoEquipPets,
-  train, idleRate, idlePending, grant, bumpQuest, addPassXp, passTier,
+  openBoxes, boxUpgradeInfo, summonSkills, summonKittens, wildKitten, levelUp, levelUpWithMilk, canLevel, autoEquipSkills, autoEquipKittens,
+  train, idleRate, idlePending, grant, bumpQuest, addPassXp, passTier, equipItem, disposeItem, addToBag, rollDrops, luckMult,
+  craft, forge, breakItem, relicPull, lookUnlocked, lookPrice,
 } from './economy.js';
-import { equippedSkills, equippedPets } from './combat.js';
+import { equippedSkills, equippedKittens } from './combat.js';
 import { campaignWaves, dungeonWaves, towerWaves } from './encounters.js';
 import {
   RARITIES, VIP_PERKS, vipLevel, PRODUCTS, FIRST_RECHARGE, FUND_TIERS, PASS_TIERS, DAILY_QUESTS, DAILY_CHESTS,
   LOGIN_CALENDAR, ACHIEVEMENTS, DUNGEONS, dungeonReward, towerReward, ARENA_SHOP, arenaDailyGems, AD_LIMIT, AD_REWARDS,
-  stageIndex, stageGold, stageYarn, killGold, biomeForChapter, recycleGold, boxUpgradeGold, boxUpgradeSeconds,
-  skipGemCost, BOX_MAX_LEVEL, SKINS, PASS_XP_PER_TIER, trainingCost, TRAININGS, dupNeed, ARENA_FREE_TICKETS,
+  stageIndex, stageGold, stageYarn, killGold, biomeForChapter, recycleGold, skipGemCost, BOX_MAX_LEVEL, PASS_XP_PER_TIER,
+  trainingCost, TRAININGS, SKILLS,
 } from './config.js';
+import {
+  KITTEN_BY_ID, COSTUME_BY_ID, RES_BY_ID, BIOME_BOSS, ELEMENTS, SETS, SET_BY_ID, RELIC_CHEST, HETERO_COST, LOOK_UNLOCK, TERRITORIES, WAR_SHOP, WAR_ENERGY, breakRunes,
+} from './content.js';
+import { ensureMarket, tickMarket, buyLot, listLot, cancelListing, quickSell, sellGems, buyGems } from './market.js';
+import {
+  arenaBoard, arenaOpponents, arenaSwap, myRank, arenaSeasonCheck, botLoadout, botPower, warTick, warSeasonReward, defenderPower, defenderLoadout, defenderName,
+  ownedTerritories, tributeAvailable, warBuyCost, CLAN_BY_ID,
+} from './pvp.js';
+import { catPortraitURL, catFullURL, FURS, PATTERNS, EYES, EYE_STYLES, EARS, TAILS } from './gfx/cat.js';
+import { RCOL } from './gfx/gear.js';
 
 const BATCHES = [1, 5, 10, 25, 50];
-// Courbe de puissance « moyenne du serveur » (joueur gratuit simulé) par jour depuis l'installation
-const SERVER_CURVE = [[0, 2e3], [0.05, 6e3], [0.3, 2.5e4], [1, 7e4], [2, 6e5], [3, 1.3e6], [5, 7.6e6], [7, 1.7e7], [10, 4.2e7], [14, 1.1e8], [20, 4e8], [30, 1.75e9], [60, 4e10], [120, 2e12]];
-function serverPower(days) {
-  for (let i = 1; i < SERVER_CURVE.length; i++) {
-    const [d1, p1] = SERVER_CURVE[i];
-    const [d0, p0] = SERVER_CURVE[i - 1];
-    if (days <= d1) return p0 * Math.pow(p1 / p0, (days - d0) / (d1 - d0));
-  }
-  return SERVER_CURVE[SERVER_CURVE.length - 1][1] * Math.pow(1.05, days - 120);
-}
-
 const EXCHANGES = [
   { id: 'x_yarn1', gems: 250, rewards: { yarn: 500 } },
   { id: 'x_yarn2', gems: 2200, rewards: { yarn: 5000 } },
@@ -41,8 +39,11 @@ const EXCHANGES = [
   { id: 'x_eggs', gems: 700, rewards: { eggs: 10 } },
   { id: 'x_gold', gems: 100, rewards: { gold: 2 } },
   { id: 'x_speed', gems: 50, rewards: { speedM: 60 } },
+  { id: 'x_stone', gems: 400, rewards: { stone: 1 } },
+  { id: 'x_clover', gems: 150, rewards: { clover: 1 } },
 ];
-const GEM_VALUE = { yarn: 0.5, feathers: 90, eggs: 70, gems: 1, speedH: 60, speedM: 1, gold: 50, food: 2 };
+const GEM_VALUE = { yarn: 0.5, feathers: 90, eggs: 70, gems: 1, speedH: 60, speedM: 1, gold: 50, stone: 400, scroll: 150, clover: 150, milk: 120, rune: 2, relicKeys: 280, moonShard: 300 };
+const monthKey = () => { const d = new Date(); return d.getFullYear() + '-' + (d.getMonth() + 1); };
 
 class Game {
   constructor() {
@@ -52,19 +53,19 @@ class Game {
     this.fps = 60;
     this.uiT = 0;
     this.secT = 0;
+    this.useStone = false;
+    this.useScroll = false;
   }
 
   boot(hotData) {
     this.st = loadState(hotData && hotData.save);
+    ensureMarket(this.st);
     this.ui = new UI(this);
-    this.world = new World(this.ui.glEl);
-    this.fx = new FX(this.world, this.ui.textEl, this.ui.flashEl);
-    this.battle = new Battle(this.world, this.fx, this, this.ui.barsEl);
-    try { this.ui.setSnaps(renderSnapshots()); } catch (e) { console.warn(e); }
+    this.stage = new Stage(this.ui.glEl);
+    this.battle = new Battle(this.stage, this);
     const lowEnd = (navigator.hardwareConcurrency || 8) <= 4;
-    this.autoQ = { level: lowEnd ? 'medium' : 'high', low: 0, t: 0, frames: 0 };
+    this.autoQ = { level: lowEnd ? 'medium' : 'high', t: 0 };
     this.afterLoad(true);
-    // audio au premier contact
     const unlock = () => { initAudio(); setSound(this.st.settings.sound); setMusic(this.st.settings.music); window.removeEventListener('pointerdown', unlock); };
     window.addEventListener('pointerdown', unlock);
     document.addEventListener('visibilitychange', () => { if (document.hidden) this.save(); });
@@ -78,64 +79,85 @@ class Game {
   afterLoad(first) {
     const st = this.st;
     const fresh = ensureDaily(st);
-    if (!st.arena.order) st.arena.order = [...st.arena.bots.map((b) => b.id), 'me'];
-    autoEquipSkills(st); autoEquipPets(st);
+    autoEquipSkills(st); autoEquipKittens(st);
     this.applyQuality();
     this.recalc(true);
-    this.world.setBiome(biomeForChapter(st.camp.ch).id, st.camp.ch * 13 + 7);
     this.ui.renderGear();
     this.ui.renderSide();
-    this.ui.avatarImg.src = this.ui.snaps['head_' + st.skins.current] || '';
     this.startCampaign();
     if (fresh) this.onNewDay();
-    const p = idlePending(st);
+    this.offlineCatchUp();
+    const p = idlePending(st, this.stats);
     if (first && p.hours > 0.08 && st.stats.opens > 0) setTimeout(() => { this.ui.toast(`Bon retour ! ${fmtTime(p.hours * 3600)} de patrouille`, 'gold'); this.ui.showIdle(); }, 600);
     if (st.stats.opens === 0) setTimeout(() => this.welcome(), 400);
+  }
+  offlineCatchUp() {
+    const sold = tickMarket(this.st);
+    if (sold.length) setTimeout(() => this.ui.toast(`Hôtel des ventes : ${sold.length} lot(s) vendu(s) pendant votre absence (+${fmt(sold.reduce((a, s) => a + s.price, 0))} or)`, 'gold'), 1500);
+    this.handleWarEvents(warTick(this.st));
+    const season = arenaSeasonCheck(this.st);
+    if (season) setTimeout(() => this.give({ gems: season.gems, arenaCoins: 500 }, `Saison d'arène : ${season.div.name}`, true), 2500);
   }
 
   welcome() {
     const body = h('div.welcome', null,
-      h('img', { src: this.ui.snaps['skin_tabby'] || '', alt: '' }),
-      h('p', null, 'Les rats, les chiens et les aspirateurs ont envahi le royaume ! Ouvrez le carton magique pour équiper Minou et bâtir l\'empire des chats.'),
-      h('p.muted.small', null, 'Astuce : chaque carton ouvert donne de l\'expérience. Plus le carton est amélioré, plus les objets sont rares.'),
+      h('img', { src: this.fullURL(), alt: '' }),
+      h('p', null, 'Les rats, les chiens et les aspirateurs ont envahi le royaume ! Ouvrez le carton magique pour équiper Minou, adoptez des chatons et bâtissez l\'empire des chats.'),
+      h('p.muted.small', null, 'Astuce : touchez votre portrait pour personnaliser votre chat (pelage, yeux, oreilles…).'),
     );
     this.ui.modal({ title: 'Bienvenue dans Miaou Empire', body, buttons: [{ label: 'C\'est parti !', cls: 'green', fn: () => { sfx('meow'); } }] });
   }
-
   save() { saveState(this.st); }
+
+  // ------------------------------------------------------------------ apparence & rendu du héros
+  costume() { const c = COSTUME_BY_ID[this.st.costumes.current]; return this.st.costumes.show && c && c.look ? c : null; }
+  appearance() { const c = this.costume(); return c ? { ...this.st.look, ...c.look } : this.st.look; }
+  gearVisual() {
+    const g = {};
+    for (const k in this.st.gear) { const it = this.st.gear[k]; if (it) g[k] = { base: it.base, r: it.r }; }
+    const c = this.costume();
+    if (c && c.gear) Object.assign(g, c.gear);
+    return g;
+  }
+  portrait() { const g = this.gearVisual(); return catPortraitURL(this.appearance(), { hat: g.hat, face: g.face }, 96); }
+  fullURL() { return catFullURL(this.appearance(), this.gearVisual(), 220); }
+  costumeURL(id) { const c = COSTUME_BY_ID[id]; return c.look ? catFullURL({ ...this.st.look, ...c.look }, c.gear || {}, 150) : catFullURL(this.st.look, {}, 150); }
+  kittenURL(id) { const k = KITTEN_BY_ID[id]; return catFullURL(k.look, k.look.wings ? { wings: { base: k.look.wings, r: Math.max(4, k.r) } } : {}, 120, true); }
+
+  playerDef() {
+    const st = this.st, S = this.stats;
+    const perks = VIP_PERKS[S.vip];
+    const gear = this.gearVisual();
+    const kits = equippedKittens(st, perks.kittenSlots).map((k) => ({ id: k.id, name: k.name, el: k.el, r: k.r, look: k.look, mult: k.mult }));
+    return { name: 'Minou', appearance: this.appearance(), gear, stats: S, skills: equippedSkills(st, perks.skillSlots), kittens: kits, weaponColor: gear.weapon ? RCOL[gear.weapon.r] : '#ffffff', perks: S.perks };
+  }
 
   // ------------------------------------------------------------------ stats
   recalc(silent) {
     const old = this.stats;
     this.stats = computeStats(this.st);
     const perks = VIP_PERKS[this.stats.vip];
-    this.battle.setPlayer(this.stats, equippedSkills(this.st, perks.skillSlots), equippedPets(this.st, perks.petSlots), this.st.skins.current, this.st.gear);
+    this.battle.setPlayer(this.playerDef());
     if (old && !silent) this.ui.powerUp(this.stats.power - old.power);
     if (this.battle.speed > perks.speed) this.battle.speed = perks.speed;
     this.ui.renderSkillRow();
   }
-  refreshAll() {
-    this.recalc();
-    this.ui.renderGear();
-    this.ui.refresh();
-  }
+  refreshAll() { this.recalc(); this.ui.renderGear(); this.ui.refresh(); }
 
   // ------------------------------------------------------------------ campagne
   stageFromIdx(s) { return { ch: Math.floor(s / 10) + 1, st: (s % 10) + 1 }; }
   startCampaign() {
     const c = this.st.camp;
     this.special = null;
-    this.battle.start({ mode: 'campaign', waves: campaignWaves(c.ch, c.st), stageIdx: stageIndex(c.ch, c.st) });
+    this.battle.setScenery(biomeForChapter(c.ch).id, c.ch * 13 + 7);
+    this.battle.start({ mode: 'campaign', waves: campaignWaves(c.ch, c.st), stageIdx: stageIndex(c.ch, c.st), biome: biomeForChapter(c.ch).id });
     this.ui.updateStageInfo();
   }
   setStage(s) {
     const oldCh = this.st.camp.ch;
     const { ch, st } = this.stageFromIdx(s);
     this.st.camp.ch = ch; this.st.camp.st = st;
-    if (ch !== oldCh) {
-      this.world.setBiome(biomeForChapter(ch).id, ch * 13 + 7);
-      if (ch > oldCh) this.ui.banner(`CHAPITRE ${ch}`, biomeForChapter(ch).name, 'chapter');
-    }
+    if (ch > oldCh) this.ui.banner(`CHAPITRE ${ch}`, biomeForChapter(ch).name, 'chapter');
   }
   nextIsBoss() { return this.st.camp.best % 10 === 9; }
   challenge() {
@@ -146,7 +168,7 @@ class Game {
     this.ui.updateHud();
   }
   toggleAutoChallenge() {
-    if (this.st.camp.auto) { this.st.camp.auto = false; this.ui.toast('Auto-défi désactivé : vous restez sur cette étape.'); }
+    if (this.st.camp.auto) { this.st.camp.auto = false; this.ui.toast('Auto-défi désactivé : vous restez sur cette étape pour farmer.'); }
     else this.challenge();
     this.ui.updateHud();
   }
@@ -154,41 +176,53 @@ class Game {
     const max = VIP_PERKS[this.stats.vip].speed;
     if (max <= 1) { this.ui.toast('Vitesse x2 : VIP 2 · x3 : VIP 8', 'vip'); return; }
     this.battle.speed = this.battle.speed >= max ? 1 : this.battle.speed + 1;
-    this.st.settings.speed = this.battle.speed;
     sfx('click');
   }
-
-  onEncounterStart() { this.ui.updateStageInfo(); this.ui.bossBar.hidden = true; }
+  onEncounterStart() { this.ui.updateStageInfo(); this.ui.bossBar.hidden = true; this.ui.renderSkillRow(); }
   onBoss(b) {
     const bb = this.ui.bossBar;
     if (!b) { bb.hidden = true; return; }
     bb.hidden = false;
     bb.querySelector('.bname').textContent = b.name;
+    bb.querySelector('.bfill2').dataset.r = '1';
+  }
+  onBanner(t, s, c) { this.ui.banner(t, s, c); }
+  onCutin(sk) { this.ui.cutin(sk); }
+  onSkillCast(i) { this.ui.pulseSkill(i); }
+  onKill(e, scr) {
+    const st = this.st;
+    st.stats.kills++;
+    const mode = this.battle.mode;
+    if (mode === 'campaign' || mode === 'dungeon' || mode === 'tower') {
+      const s = mode === 'campaign' ? this.battle.enc.stageIdx : Math.max(0, st.camp.best - 5);
+      const mult = (e.boss ? 10 : e.elite ? 3 : 1) * (1 + (this.stats.goldPct || 0) / 100);
+      st.res.gold += killGold(s) * mult;
+      this.ui.fly('gold', scr.x, scr.y, e.boss ? 6 : 2);
+      const drops = rollDrops(st, e.ekind, e.boss, e.def.drop, luckMult(st, this.stats));
+      if (Object.keys(drops).length) this.ui.loot(drops);
+    }
+    if (e.boss) st.stats.bossKills++;
   }
   onBossHp(r, hp) {
     const bb = this.ui.bossBar;
     bb.querySelector('.bfill').style.transform = `scaleX(${r})`;
     const f2 = bb.querySelector('.bfill2');
     const cur = parseFloat(f2.dataset.r || '1');
-    const nr = cur > r ? cur - (cur - r) * 0.04 : r;
+    const nr = cur > r ? cur - (cur - r) * 0.05 : r;
     f2.dataset.r = nr;
     f2.style.transform = `scaleX(${nr})`;
     this.ui.setText('bosshp', bb.querySelector('.bhp'), fmt(Math.max(0, hp)));
   }
-  onSkillCast(i) { this.ui.pulseSkill(i); }
-  onKill(e, scr) {
-    const st = this.st;
-    st.stats.kills++;
-    if (this.battle.mode === 'campaign') {
-      const s = this.battle.enc.stageIdx;
-      const mult = e.boss ? 10 : e.def.elite ? 3 : 1;
-      st.res.gold += killGold(s) * mult;
-      this.ui.fly('gold', scr.x, scr.y, e.boss ? 6 : 2);
-    } else if (this.battle.mode === 'dungeon' && this.special.id === 'gold') this.ui.fly('gold', scr.x, scr.y, 3);
-    else if (this.battle.mode === 'dungeon' && this.special.id === 'yarn') this.ui.fly('yarn', scr.x, scr.y, 3);
-    if (e.boss) st.stats.bossKills++;
+  maybeWildKitten(chance) {
+    if (Math.random() > chance * (1 + (this.stats.luck || 0) / 400)) return;
+    const { k, isNew } = wildKitten(this.st);
+    this.recalc();
+    setTimeout(() => {
+      sfx('meow');
+      const body = h('div.welcome', null, h('img', { src: this.kittenURL(k.id), alt: '' }), h('p', null, isNew ? `${k.name} (${RARITIES[k.r].name}) vous suit désormais !` : `Un autre ${k.name} rejoint la chatterie : +1 copie.`), h('p.small', { style: { color: ELEMENTS[k.el].color } }, 'Élément ' + ELEMENTS[k.el].name));
+      this.ui.modal({ title: 'Un chaton sauvage !', body, buttons: [{ label: 'Adopter', cls: 'green' }], rays: k.r >= 4 ? RARITIES[k.r].color : '#ffffff', cls: 'r' + k.r });
+    }, 900);
   }
-
   onEncounterEnd(win, enc) {
     const st = this.st;
     if (enc.mode === 'campaign') {
@@ -196,30 +230,29 @@ class Game {
       if (win) {
         const first = s >= st.camp.best;
         const k = first ? 1 : 0.5;
-        const gold = Math.round(stageGold(s) * k), yarn = Math.max(1, Math.round(stageYarn(s) * k));
+        const gold = Math.round(stageGold(s) * k * (1 + (this.stats.goldPct || 0) / 100)), yarn = Math.max(1, Math.round(stageYarn(s) * k));
         st.res.gold += gold; st.res.yarn += yarn;
         if (first) {
           st.camp.best = s + 1;
           bumpQuest(st, 'stage', 1);
           addPassXp(st, 2);
-          if ((s % 10) === 9) { this.ui.banner('BOSS VAINCU !', `+${fmt(gold)} or · +${yarn} pelotes`, 'boss'); sfx('legendary'); }
-          else this.ui.banner('ÉTAPE FRANCHIE', `+${fmt(gold)} or · +${yarn} pelotes`, 'small');
+          if ((s % 10) === 9) { this.ui.banner('BOSS VAINCU !', `+${fmt(gold)} or · +${yarn} pelotes`, 'boss'); sfx('legendary'); this.maybeWildKitten(0.15); }
+          else { this.ui.banner('ÉTAPE FRANCHIE', `+${fmt(gold)} or · +${yarn} pelotes`, 'small'); this.maybeWildKitten(0.03); }
           if (s === 8 && !st.iap.bought.starter) setTimeout(() => this.showProduct('starter'), 2200);
-        }
+        } else this.maybeWildKitten(0.006);
         st.camp.failStreak = 0;
         if (st.camp.auto) this.setStage(st.camp.best);
       } else {
         st.camp.failStreak++;
         st.camp.auto = false;
         this.setStage(Math.max(0, st.camp.best - 1));
-        this.ui.banner('DÉFAITE', 'Ouvrez des cartons et entraînez-vous, puis défiez à nouveau', 'lose');
+        this.ui.banner('DÉFAITE', 'Équipez-vous, forgez, adoptez des chatons… puis défiez à nouveau', 'lose');
         this.maybeFlashOffer();
       }
       this.startCampaign();
       this.ui.renderSide();
       return;
     }
-    // modes spéciaux
     const sp = this.special;
     this.special = null;
     if (sp && sp.onEnd) sp.onEnd(win);
@@ -227,10 +260,10 @@ class Game {
     this.ui.renderSide();
     this.ui.refresh();
   }
-
-  startSpecial(sp, enc) {
+  startSpecial(sp, enc, scene) {
     this.ui.closeSheet();
     this.special = sp;
+    if (scene) this.battle.setScenery(scene, 3);
     this.battle.start(enc);
     this.ui.updateStageInfo();
   }
@@ -242,7 +275,6 @@ class Game {
     this.startCampaign();
     this.ui.refresh();
   }
-
   maybeFlashOffer() {
     const st = this.st, now = Date.now();
     if (st.camp.failStreak < 2) return;
@@ -277,30 +309,25 @@ class Game {
   }
   openBoxClick() {
     const st = this.st;
-    if (st.res.yarn <= 0) {
-      sfx('error');
-      this.ui.toast('Plus de pelotes ! Récoltez votre butin ou visitez la boutique.', 'warn');
-      this.autoBox = false;
-      return;
-    }
+    if (st.res.yarn <= 0) { sfx('error'); this.ui.toast('Plus de pelotes ! Récoltez votre butin ou visitez la boutique.', 'warn'); this.autoBox = false; return; }
     initAudio();
     const n = this.batchSize();
-    if (n === 1 && !this.autoBox) this.openSingle();
-    else this.openBatch(n);
+    if (n === 1 && !this.autoBox) this.openSingle(); else this.openBatch(n);
   }
   openSingle() {
-    const st = this.st;
-    const res = openBoxes(st, 1, false);
+    const res = openBoxes(this.st, 1, false);
     if (!res) return;
     const it = res.items[0];
     this.ui.boxShake(it.r);
     sfx('open');
     this.afterOpen(res);
     setTimeout(() => {
+      if (it.relic) { this.relicFound(it); }
       if (it.r >= 4) sfx('legendary'); else if (it.r >= 3) sfx('epic'); else if (it.r >= 2) sfx('rare');
       this.ui.showItem(it, () => { this.refreshAll(); }, true);
     }, 260);
   }
+  relicFound(it) { this.ui.banner('RELIQUE !', 'Une chance sur 200 000 !', 'vip'); sfx('legendary'); this.battle.flash('#fff27a', 0.6); }
   openBatch(n) {
     const st = this.st;
     const before = this.stats.power;
@@ -314,18 +341,16 @@ class Game {
     this.ui.renderGear();
     if (res.equipped.length) sfx('equip');
     if (best.r >= 4) sfx(best.r >= 5 ? 'legendary' : 'epic');
+    if (res.relics.length) this.relicFound(res.relics[0]);
     const gained = this.stats.power - before;
     if (this.autoBox) {
-      if (best.r >= st.box.stopAt && !res.equipped.includes(best)) {
-        this.autoBox = false;
-        this.ui.showItem(best, () => this.refreshAll(), true);
-      }
+      if ((best.r >= st.box.stopAt && !res.equipped.includes(best)) || res.relics.length) { this.autoBox = false; this.ui.showItem(best, () => this.refreshAll(), false); }
       if (st.res.yarn <= 0) { this.autoBox = false; this.ui.toast('Pelotes épuisées : ouverture auto arrêtée'); }
       return;
     }
     const body = h('div.batch-res', null,
       h('div.batch-grid', null, res.items.slice(0, 50).map((it) => this.ui.itemIcon(it, res.equipped.includes(it) ? 'new' : 'rec'))),
-      h('p.center', null, `${res.equipped.length} équipé(s) · ${n - res.equipped.length} recyclé(s) · +${fmt(res.gold)} or`),
+      h('p.center', null, `${res.equipped.length} équipé(s) · ${n - res.equipped.length} ${st.box.autoBreak ? 'brisé(s)' : 'recyclé(s)'} · +${fmt(res.gold)} or${res.runes ? ` · +${res.runes} runes` : ''}`),
       gained > 0 ? h('p.center.good', null, `Puissance +${fmt(gained)}`) : null,
     );
     this.ui.modal({ title: `Carton x${n}`, body, buttons: [{ label: 'Encore !', cls: 'gold', fn: () => { setTimeout(() => this.openBoxClick(), 50); } }, { label: 'OK', cls: 'blue' }], rays: best.r >= 4 ? RARITIES[best.r].color : null });
@@ -334,24 +359,18 @@ class Game {
     if (res.lvUps) {
       sfx('levelup');
       this.ui.banner(`NIVEAU ${this.st.hero.lvl} !`, 'Vos objets seront plus puissants', 'level');
-      this.fx.pillar(this.battle.player.model.root.position, '#7fd8ff', { r: 0.8, life: 0.9 });
-      this.fx.burst(this.battle.player.model.root.position.clone().setY(1), { count: 40, color: ['#7fd8ff', '#ffffff'], up: 3, speed: 3, size: 0.25, life: 1, shape: 1 });
+      const H = this.battle.hero;
+      if (H) { this.battle.fx.pillar(H.x, { color: '#7fd8ff', width: 34, dur: 0.9, y: H.y }); this.battle.fx.burst(H.x, H.y - 60, { count: 40, color: ['#7fd8ff', '#ffffff'], up: 120, speed: 120, size: 9, life: 1, shape: 'star' }); }
     }
     this.ui.updateHud();
   }
   recycleValue(it) { return recycleGold(it); }
-  recycle(it) {
-    this.st.res.gold += recycleGold(it);
-    sfx('coin');
-    this.refreshAll();
-  }
-  equip(it) {
-    const cur = this.st.gear[it.slot];
-    if (cur && cur.id !== it.id) this.st.res.gold += recycleGold(cur);
-    this.st.gear[it.slot] = it;
-    sfx('equip');
-    this.refreshAll();
-  }
+  breakValue(it) { return breakRunes(it) * (1 + (it.upg || 0)); }
+  recycle(it) { if (it.relic) { addToBag(this.st, it); this.refreshAll(); return; } disposeItem(this.st, it, false); sfx('coin'); this.refreshAll(); }
+  breakNew(it) { if (it.relic) { addToBag(this.st, it); this.refreshAll(); return; } disposeItem(this.st, it, true); sfx('coin'); this.refreshAll(); }
+  equip(it) { equipItem(this.st, it, this.st.box.autoBreak); sfx('equip'); this.refreshAll(); }
+  breakBagItem(it) { const n = breakItem(this.st, it); if (n) { this.ui.toast(`+${n} runes de forge`, 'gold'); sfx('slash'); } this.refreshAll(); }
+  setAutoBreak(v) { this.st.box.autoBreak = v; this.ui.refresh(); }
   upgradeBox() {
     const st = this.st;
     const up = boxUpgradeInfo(st);
@@ -374,13 +393,7 @@ class Game {
   }
   finishBox() { this.checkBox(); this.ui.updateHud(); }
   skipCost() { return skipGemCost(Math.max(0, (this.st.box.upUntil - Date.now()) / 1000)); }
-  skipBox() {
-    const c = this.skipCost();
-    if (!this.spendGems(c)) return true;
-    this.st.box.upUntil = Date.now() - 1;
-    this.checkBox();
-    this.ui.updateHud();
-  }
+  skipBox() { const c = this.skipCost(); if (!this.spendGems(c)) return true; this.st.box.upUntil = Date.now() - 1; this.checkBox(); this.ui.updateHud(); }
   useSpeedups() {
     const st = this.st;
     const left = Math.max(0, (st.box.upUntil - Date.now()) / 60000);
@@ -392,12 +405,7 @@ class Game {
     this.ui.updateHud();
   }
   spendGems(n) {
-    if (this.st.res.gems < n) {
-      sfx('error');
-      this.ui.toast('Pas assez de gemmes', 'warn');
-      this.ui.open('shop', 'gems');
-      return false;
-    }
+    if (this.st.res.gems < n) { sfx('error'); this.ui.toast('Pas assez de gemmes', 'warn'); this.ui.open('shop', 'gems'); return false; }
     this.st.res.gems -= n;
     return true;
   }
@@ -412,72 +420,153 @@ class Game {
   }
   trainAffordable() { return TRAININGS.some((t) => (!t.max || this.st.train[t.id] < t.max) && this.st.res.gold >= trainingCost(t.id, this.st.train[t.id]) * 3); }
 
-  // ------------------------------------------------------------------ gacha
-  summon(kind, n, free) {
+  // ------------------------------------------------------------------ pouvoirs
+  summonSkills(n, free) {
     const st = this.st;
-    const res = kind === 'skills' ? 'feathers' : 'eggs';
     if (free) { if (st.daily.summonFree) return; st.daily.summonFree = true; }
-    else if (st.res[res] >= n) st.res[res] -= n;
-    else {
-      const price = kind === 'skills' ? { 1: 100, 10: 900, 35: 3000 }[n] : { 1: 80, 10: 700, 35: 2400 }[n];
-      if (!this.spendGems(price)) return;
-    }
-    const got = kind === 'skills' ? summonSkills(st, n) : summonPets(st, n);
+    else if (st.res.feathers >= n) st.res.feathers -= n;
+    else if (!this.spendGems({ 1: 100, 10: 900, 35: 3000 }[n])) return;
+    const got = summonSkills(st, n);
     const best = Math.max(...got.map((x) => x.r));
     sfx(best >= 5 ? 'legendary' : best >= 4 ? 'epic' : 'rare');
-    const ui = this.ui;
-    const body = h('div.summon-res', null, got.map((x, i) => {
-      const c = h('div.sres', { cls: 'r' + x.r, style: { '--rc': RARITIES[x.r].color, '--rd': RARITIES[x.r].dark, animationDelay: Math.min(i, 20) * 0.05 + 's' } },
-        kind === 'skills' ? h('span.sk-ic', { html: icon('sk_' + x.id) }) : h('img', { src: ui.snaps['pet_' + x.id] || '', alt: '' }),
-        h('b', null, x.name),
-      );
-      return c;
-    }));
-    ui.modal({ title: kind === 'skills' ? 'Invocation de pouvoirs' : 'Éclosion !', body, buttons: [{ label: 'Encore x' + n, cls: 'gold', fn: () => { setTimeout(() => this.summon(kind, n), 60); } }, { label: 'OK', cls: 'blue' }], rays: best >= 4 ? RARITIES[best].color : null, cls: best >= 4 ? 'legendary' : '' });
+    const body = h('div.summon-res', null, got.map((x, i) => h('div.sres', { cls: 'r' + x.r, style: { '--rc': RARITIES[x.r].color, '--rd': RARITIES[x.r].dark, animationDelay: Math.min(i, 20) * 0.05 + 's' } }, h('span.sk-ic', { html: icon('sk_' + x.id) }), h('b', null, x.name))));
+    this.ui.modal({ title: 'Invocation de pouvoirs', body, buttons: [{ label: 'Encore x' + n, cls: 'gold', fn: () => { setTimeout(() => this.summonSkills(n), 60); } }, { label: 'OK', cls: 'blue' }], rays: best >= 4 ? RARITIES[best].color : null });
     this.refreshAll();
     this.tutoCheck();
   }
   anyLevelUp(kind) { return Object.values(this.st[kind].owned).some((o) => canLevel(o)); }
-  levelUpEntry(kind, id) {
-    const o = this.st[kind].owned[id];
-    if (!levelUp(o)) return;
-    sfx('levelup');
-    this.ui.toast(`Niveau ${o.lvl} !`, 'gold');
-    this.ui.closeAllModals();
-    this.refreshAll();
-  }
-  equipEntry(kind, id) {
-    const st = this.st;
-    const slots = kind === 'skills' ? VIP_PERKS[this.stats.vip].skillSlots : VIP_PERKS[this.stats.vip].petSlots;
-    const eq = st[kind].equipped;
+  levelUpSkill(id) { const o = this.st.skills.owned[id]; if (!levelUp(o)) return; sfx('levelup'); this.ui.toast(`Niveau ${o.lvl} !`, 'gold'); this.ui.closeAllModals(); this.refreshAll(); }
+  equipSkill(id) {
+    const st = this.st, slots = VIP_PERKS[this.stats.vip].skillSlots, eq = st.skills.equipped;
     if (eq.slice(0, slots).includes(id)) return;
     let idx = eq.slice(0, slots).findIndex((x) => !x);
     if (idx < 0) idx = slots - 1;
-    eq[idx] = id;
-    sfx('equip');
-    this.refreshAll();
+    eq[idx] = id; sfx('equip'); this.refreshAll();
   }
-  unequipEntry(kind, idx) { this.st[kind].equipped[idx] = null; this.refreshAll(); }
+  unequipSkill(i) { this.st.skills.equipped[i] = null; this.refreshAll(); }
 
-  setSkin(id) {
-    this.st.skins.current = id;
-    this.ui.avatarImg.src = this.ui.snaps['head_' + id] || '';
-    sfx('meow');
+  // ------------------------------------------------------------------ chatons
+  summonKittens(n) {
+    const st = this.st;
+    if (st.res.eggs >= n) st.res.eggs -= n;
+    else if (!this.spendGems({ 1: 80, 10: 700, 35: 2400 }[n])) return;
+    const got = summonKittens(st, n);
+    const best = Math.max(...got.map((x) => x.k.r));
+    sfx(best >= 5 ? 'legendary' : best >= 3 ? 'epic' : 'rare');
+    if (best >= 4) sfx('meow');
+    const body = h('div.summon-res', null, got.map(({ k, isNew }, i) => h('div.sres', { cls: 'r' + k.r, style: { '--rc': RARITIES[k.r].color, '--rd': RARITIES[k.r].dark, animationDelay: Math.min(i, 20) * 0.05 + 's' } }, h('img', { src: this.kittenURL(k.id), alt: '' }), h('b', null, k.name), isNew ? h('i.new-tag', null, 'NOUVEAU') : null)));
+    this.ui.modal({ title: 'Le panier s\'ouvre…', body, buttons: [{ label: 'Encore x' + n, cls: 'gold', fn: () => { setTimeout(() => this.summonKittens(n), 60); } }, { label: 'OK', cls: 'blue' }], rays: best >= 4 ? RARITIES[best].color : null, cls: best >= 4 ? 'legendary' : '' });
     this.refreshAll();
-    const p = this.battle.player.model.root.position;
-    this.fx.burst(p.clone().setY(1), { count: 50, color: ['#ffd23f', '#ff7ae0', '#ffffff'], speed: 4, up: 2, size: 0.3, life: 0.9, shape: 1 });
+    this.tutoCheck();
   }
-  skinSource(id) {
-    const s = SKIN_BY_ID[id];
-    if (s.src.includes('Ninja')) this.showProduct('ninja');
-    else if (s.src.includes('Cyber')) this.showProduct('cyber');
-    else if (s.src.includes('Baleine')) this.showProduct('whale');
-    else if (s.src.includes('VIP')) this.ui.open('shop', 'vip');
-    else if (s.src.includes('arène')) this.ui.open('adventure', 'arena');
-    else if (s.src.includes('Passe')) this.ui.open('shop', 'pass');
-    else if (s.src.includes('Connexion')) this.ui.open('quests', 'login');
-    else if (s.src.includes('Arbre')) this.ui.open('adventure', 'tower');
+  levelUpKitten(id, milk) {
+    const o = this.st.kittens.owned[id];
+    const ok = milk ? levelUpWithMilk(this.st, o) : levelUp(o);
+    if (!ok) return;
+    sfx('levelup'); sfx('meow');
+    this.ui.toast(`${KITTEN_BY_ID[id].name} passe niveau ${o.lvl} !`, 'gold');
+    this.ui.closeAllModals();
+    this.refreshAll();
   }
+  equipKitten(id) {
+    const st = this.st, slots = VIP_PERKS[this.stats.vip].kittenSlots, eq = st.kittens.equipped;
+    if (eq.slice(0, slots).includes(id)) return;
+    let idx = eq.slice(0, slots).findIndex((x) => !x);
+    if (idx < 0) idx = slots - 1;
+    eq[idx] = id; sfx('meow'); this.refreshAll();
+  }
+  unequipKitten(i) { this.st.kittens.equipped[i] = null; this.refreshAll(); }
+
+  // ------------------------------------------------------------------ apparence & costumes
+  pickLook(cat, id) {
+    const st = this.st;
+    if (cat === 'pcolor') { st.look.pcolor = id; this.lookChanged(); return; }
+    if (!lookUnlocked(st, cat, id)) {
+      const p = lookPrice(cat, id);
+      if (typeof p === 'number') {
+        this.ui.modal({ title: 'Débloquer', body: h('div.col.center', null, h('p', { html: `Débloquer cette option pour ${icon('gems')} ${p} ?` }), h('p.small.muted', null, 'Elle reste à vous pour toujours.')), buttons: [{ label: 'Débloquer', sub: `${icon('gems')} ${p}`, cls: 'purple', fn: () => { if (!this.spendGems(p)) return; st.unlocks.push(cat + ':' + id); st.look[cat] = id; sfx('buy'); this.lookChanged(); } }] });
+      } else if (p === 'pack') this.showProduct('whale');
+      else this.ui.open('shop', 'vip');
+      return;
+    }
+    st.look[cat] = id;
+    if (cat === 'pattern' && !st.look.pcolor) st.look.pcolor = null;
+    this.lookChanged();
+  }
+  toggleHetero() {
+    const st = this.st;
+    if (st.look.eye2) { st.look.eye2 = null; this.lookChanged(); return; }
+    const go = () => { const others = Object.keys(EYES).filter((e) => e !== st.look.eye && lookUnlocked(st, 'eye', e)); st.look.eye2 = pick(others); this.lookChanged(); };
+    if (st.unlocks.includes('eye2:on')) go();
+    else if (this.spendGems(HETERO_COST)) { st.unlocks.push('eye2:on'); sfx('buy'); go(); }
+  }
+  randomLook() {
+    const st = this.st;
+    for (const [cat, map] of [['fur', FURS], ['pattern', PATTERNS], ['eye', EYES], ['eyeStyle', EYE_STYLES], ['ears', EARS], ['tail', TAILS]]) {
+      const ok = Object.keys(map).filter((id) => lookUnlocked(st, cat, id));
+      st.look[cat] = pick(ok);
+    }
+    st.look.pcolor = Math.random() < 0.5 ? null : pick(['#c2611c', '#7a4a2e', '#3a3646', '#5b3a2b', '#8a8f9e', '#e8873a']);
+    st.look.pcolor2 = '#3a3646';
+    this.lookChanged();
+  }
+  lookChanged() { sfx('meow'); this.refreshAll(); }
+  toggleCostumeShow() { this.st.costumes.show = !this.st.costumes.show; this.lookChanged(); }
+  setCostume(id) { this.st.costumes.current = id; this.st.costumes.show = !!COSTUME_BY_ID[id].look; this.lookChanged(); const H = this.battle.hero; if (H) this.battle.fx.burst(H.x, H.y - 60, { count: 50, color: ['#ffd23f', '#ff7ae0', '#ffffff'], speed: 160, up: 80, size: 10, life: 0.9, shape: 'star' }); }
+  costumeSource(id) {
+    const s = COSTUME_BY_ID[id].src;
+    if (s.includes('Ninja')) this.showProduct('ninja');
+    else if (s.includes('Cyber')) this.showProduct('cyber');
+    else if (s.includes('Baleine')) this.showProduct('whale');
+    else if (s.includes('VIP')) this.ui.open('shop', 'vip');
+    else if (s.includes('arène')) this.ui.open('combat', 'arena');
+    else if (s.includes('Gouttières')) this.ui.open('combat', 'war');
+    else if (s.includes('Passe')) this.ui.open('shop', 'pass');
+    else if (s.includes('Connexion')) this.ui.open('quests', 'login');
+    else if (s.includes('Arbre')) this.ui.open('combat', 'tower');
+  }
+
+  // ------------------------------------------------------------------ atelier
+  atelierDot() { return SETS.some((S) => this.st.hero.lvl >= S.lvl && this.st.artisan.lvl >= S.artisan && S.cost.every(([id, n]) => (this.st.mats[id] || 0) >= n)) || this.st.res.clover > 0 && this.st.boost.cloverUntil < Date.now(); }
+  craftPiece(setId, slot) {
+    const res = craft(this.st, setId, slot);
+    if (!res) {
+      const S = SET_BY_ID[setId];
+      const miss = S.cost.filter(([id, n]) => (this.st.mats[id] || 0) < n).map(([id, n]) => `${RES_BY_ID[id].name} ${this.st.mats[id] || 0}/${n}`);
+      sfx('error');
+      this.ui.toast(miss.length ? 'Il manque : ' + miss.join(', ') : 'Or ou niveau insuffisant', 'warn');
+      return;
+    }
+    sfx('legendary');
+    if (res.ups) this.ui.toast(`Artisan niveau ${this.st.artisan.lvl} !`, 'gold');
+    this.ui.showItem(res.it, () => this.refreshAll(), false);
+    if (res.perfect) this.ui.toast('JET PARFAIT !', 'gold');
+    this.refreshAll();
+  }
+  forgeItem(it) {
+    const r = forge(this.st, it, this.useStone, this.useScroll);
+    if (!r) { sfx('error'); this.ui.toast('Pas assez de runes ou d\'or', 'warn'); return; }
+    const box = this.ui.sheetEl.querySelector('.forge-box');
+    if (r.ok) { sfx('legendary'); this.ui.toast(`Forgemagie réussie : +${r.upg} !`, 'gold'); box && box.classList.add('forge-ok'); }
+    else { sfx('defeat'); this.ui.toast(r.down ? `Échec… l'objet redescend à +${r.upg}` : 'Échec de la forgemagie', 'warn'); box && box.classList.add('forge-ko'); }
+    setTimeout(() => this.refreshAll(), 450);
+  }
+  useClover() {
+    if (this.st.res.clover < 1) return;
+    this.st.res.clover--;
+    this.st.boost.cloverUntil = Math.max(Date.now(), this.st.boost.cloverUntil) + 3600000;
+    sfx('buy'); this.ui.toast('Trèfle actif : butin x2 pendant 1 h !', 'gold');
+    this.refreshAll();
+  }
+
+  // ------------------------------------------------------------------ marché
+  marketDot() { return this.st.market.log.some((l) => l.t > (this.st.market.seenLog || 0)); }
+  marketBuy(id, lot) { const r = buyLot(this.st, id, lot); if (r.err) { sfx('error'); this.ui.toast(r.err, 'warn'); return; } sfx('coin'); this.ui.toast(`Acheté : ${RES_BY_ID[id].name} x${lot} (${fmt(r.price)} or)`); this.ui.refresh(); }
+  marketList(id, lot, price) { const r = listLot(this.st, id, lot, price); if (r.err) { sfx('error'); this.ui.toast(r.err, 'warn'); return; } sfx('coin'); this.ui.toast(`Mis en vente (taxe ${fmt(r.tax)} or)`); this.sellPrice = 0; this.ui.refresh(); }
+  marketCancel(uid) { cancelListing(this.st, uid); this.ui.refresh(); }
+  marketQuickSell(id, n) { const g = quickSell(this.st, id, n); if (g) { sfx('coin'); this.ui.toast(`+${fmt(g)} or`); } this.sellPrice = 0; this.ui.refresh(); }
+  sellGems(n) { const g = sellGems(this.st, n); if (g) { sfx('coin'); this.ui.toast(`${n} gemmes → ${fmt(g)} or`, 'gold'); } this.ui.refresh(); }
+  buyGems(n) { const r = buyGems(this.st, n); if (r.err) { sfx('error'); this.ui.toast(r.err, 'warn'); return; } sfx('buy'); this.ui.toast(`+${r.n} gemmes (${fmt(r.cost)} or)`, 'gold'); this.ui.refresh(); }
 
   // ------------------------------------------------------------------ récompenses
   previewRewards(r) {
@@ -485,7 +574,7 @@ class Game {
     for (const k in r) {
       const v = r[k];
       if (!v) continue;
-      if (k === 'gold') out.push({ k: 'gold', v: Math.round(idleRate(this.st).gold * v) });
+      if (k === 'gold') out.push({ k: 'gold', v: Math.round(idleRate(this.st, this.stats).gold * v) });
       else if (k === 'goldRaw') out.push({ k: 'gold', v });
       else if (k === 'speedH') out.push({ k: 'speedMin', v: v * 60 });
       else if (k === 'speedM') out.push({ k: 'speedMin', v });
@@ -495,49 +584,49 @@ class Game {
   }
   give(rewards, title, big) {
     const list = grant(this.st, rewards);
-    if (rewards.skin || rewards.pet || rewards.skill) this.recalc();
+    this.recalc();
     this.ui.rewards(list, title, { big });
     this.refreshAll();
     return list;
   }
-  idleRate() { return idleRate(this.st); }
+  idleRate() { return idleRate(this.st, this.stats); }
   claimIdle(mult) {
-    const p = idlePending(this.st);
+    const p = idlePending(this.st, this.stats);
     this.st.idleSince = Date.now();
     this.give({ goldRaw: p.gold * mult, yarn: p.yarn * mult }, mult > 1 ? 'Butin doublé !' : 'Butin récolté');
   }
 
   // ------------------------------------------------------------------ achats (simulés)
+  monthSpent() { return this.st.iap.months[monthKey()] || 0; }
   productValue(id) {
     const p = PRODUCTS[id];
     if (!p.rewards) return 0;
     let v = 0;
     for (const k in p.rewards) {
-      if (k === 'skin') v += 2500 * SKIN_BY_ID[p.rewards[k]].r;
-      else if (k === 'pet' || k === 'skill') v += 1500;
+      if (k === 'costume') v += 2500 * COSTUME_BY_ID[p.rewards[k]].r;
+      else if (k === 'kitten') v += 400 * (KITTEN_BY_ID[p.rewards[k]].r + 1);
+      else if (k === 'skill' || k === 'look') v += 1500;
       else v += (GEM_VALUE[k] || 0) * p.rewards[k];
     }
     return v / ((p.price / 100) * 66);
   }
   showProduct(id, flash) {
     const p = PRODUCTS[id];
-    const ui = this.ui;
-    const st = this.st;
+    const ui = this.ui, st = this.st;
     const first = p.kind === 'gems' && !st.iap.bought[id];
     let content;
     if (p.kind === 'gems') content = h('div.rewards', null, ui.rewardChip({ k: 'gems', v: p.gems * (first ? 2 : 1) }));
     else if (p.rewards) content = h('div.rewards', null, this.previewRewards(p.rewards).map((r) => ui.rewardChip(r)));
-    else if (p.kind === 'pass') content = h('p', null, id === 'pass_deluxe' ? 'Débloque toutes les récompenses premium, +10 paliers immédiats et 5 000 pelotes. Costume Capitaine Moustache au palier 30.' : 'Débloque toutes les récompenses premium du Passe Royal. Costume Capitaine Moustache au palier 30.');
+    else if (p.kind === 'pass') content = h('p', null, id === 'pass_deluxe' ? 'Toutes les récompenses premium, +10 paliers immédiats et 5 000 pelotes. Costume Capitaine Moustache au palier 30.' : 'Toutes les récompenses premium du Passe Royal. Costume Capitaine Moustache au palier 30.');
     else content = h('p', null, p.desc);
     const val = this.productValue(id);
     const body = h('div.product', null,
-      p.tag ? h('span.ptag', null, p.tag) : null,
-      content,
+      p.tag ? h('span.ptag', null, p.tag) : null, content,
       val > 3 ? h('div.pval.big', null, `x${Math.round(val)} de valeur !`) : null,
       first ? h('div.pval.big', null, 'Premier achat : gemmes x2') : null,
       flash && st.iap.flash ? h('p.center.timer', null, 'Expire dans ', h('b', { dataset: { until: st.iap.flash.until } }, '')) : null,
       h('p.vip-pts', { html: `${icon('crown')} +${p.price} points VIP` }),
-      st.iap.firstRecharge === 0 ? h('p.center.good.small', null, '+ Bonus de premier achat : Laser Oculaire, Dragonnet et plus !') : null,
+      st.iap.firstRecharge === 0 ? h('p.center.good.small', null, '+ Bonus de premier achat : Laser Oculaire, chaton Drakou et plus !') : null,
     );
     ui.modal({ title: p.name, body, cls: 'product-modal' + (flash ? ' flash' : ''), rays: flash || p.price >= 4999 ? '#ffb52e' : null, buttons: [{ label: 'Acheter ' + (p.price / 100).toFixed(2).replace('.', ',') + ' €', cls: 'green', fn: () => { this.purchase(id); } }] });
     setTimeout(() => ui.tickTimers(), 0);
@@ -546,9 +635,13 @@ class Game {
     const p = PRODUCTS[id];
     const st = this.st;
     if ((p.kind === 'once' && st.iap.bought[id]) || (p.kind === 'daily' && st.iap.daily[id]) || (p.kind === 'weekly' && st.iap.weekly[id])) { this.ui.toast('Déjà acheté'); return; }
-    if (p.kind === 'card' && id === 'lifetime' && st.iap.lifetime) return;
-    if (p.kind === 'card' && id === 'fund' && st.iap.fund) return;
+    if (id === 'lifetime' && st.iap.lifetime) return;
+    if (id === 'fund' && st.iap.fund) return;
     if (p.kind === 'pass' && st.iap.pass >= (id === 'pass_deluxe' ? 2 : 1)) return;
+    if (st.settings.capCents && this.monthSpent() + p.price > st.settings.capCents) {
+      this.ui.modal({ title: 'Limite de dépenses', body: h('p.center', null, 'Cet achat dépasserait votre limite mensuelle. Vous pouvez la modifier dans les Paramètres.'), buttons: [{ label: 'OK', cls: 'blue' }] });
+      return;
+    }
     const close = this.ui.modal({ title: 'Paiement sécurisé', body: h('div.paying', null, h('i.spinner'), h('p', null, 'Paiement simulé en cours…'), h('p.muted.small', null, 'Aucun paiement réel. Branchez Google Play Billing / App Store pour la version publiée.')), noClose: true });
     setTimeout(() => { close(); this.applyPurchase(id); }, 900);
   }
@@ -558,6 +651,7 @@ class Game {
     const oldVip = vipLevel(st.iap.vip);
     st.iap.spent += p.price;
     st.iap.vip += p.price;
+    st.iap.months[monthKey()] = this.monthSpent() + p.price;
     st.iap.bought[id] = (st.iap.bought[id] || 0) + 1;
     const rewards = {};
     if (p.kind === 'gems') rewards.gems = p.gems * (st.iap.bought[id] === 1 ? 2 : 1);
@@ -583,40 +677,33 @@ class Game {
     setTimeout(() => {
       sfx('legendary');
       this.ui.banner(`VIP ${to} !`, 'Nouveaux privilèges débloqués', 'vip');
-      if (to >= 8 && !st.skins.owned.includes('pharaoh')) this.give({ skin: 'pharaoh' }, 'Cadeau VIP 8', true);
-      if (to >= 12 && !st.skins.owned.includes('lion')) this.give({ skin: 'lion' }, 'Cadeau VIP 12', true);
-      autoEquipSkills(st); autoEquipPets(st);
+      if (to >= 8 && !st.costumes.owned.includes('pharaoh')) this.give({ costume: 'pharaoh' }, 'Cadeau VIP 8', true);
+      if (to >= 12 && !st.costumes.owned.includes('lion')) this.give({ costume: 'lion' }, 'Cadeau VIP 12', true);
+      autoEquipSkills(st); autoEquipKittens(st);
       this.recalc();
     }, 1200);
   }
-  claimFirstRecharge() {
-    if (this.st.iap.firstRecharge !== 1) return;
-    this.st.iap.firstRecharge = 2;
-    this.ui.closeSheet();
-    this.give(FIRST_RECHARGE, 'Bonus de premier achat !', true);
-  }
-  claimFreeGift() {
-    if (this.st.daily.freeGift) return;
-    this.st.daily.freeGift = true;
-    this.give({ yarn: 300, gems: 20 }, 'Cadeau du jour');
-  }
+  claimFirstRecharge() { if (this.st.iap.firstRecharge !== 1) return; this.st.iap.firstRecharge = 2; this.ui.closeSheet(); this.give(FIRST_RECHARGE, 'Bonus de premier achat !', true); }
+  claimFreeGift() { if (this.st.daily.freeGift) return; this.st.daily.freeGift = true; this.give({ yarn: 300, gems: 20 }, 'Cadeau du jour'); }
   exchanges() { return EXCHANGES; }
-  exchange(id) {
-    const x = EXCHANGES.find((e) => e.id === id);
-    if (!this.spendGems(x.gems)) return;
-    this.give(x.rewards, 'Échange réussi');
+  exchange(id) { const x = EXCHANGES.find((e) => e.id === id); if (!this.spendGems(x.gems)) return; this.give(x.rewards, 'Échange réussi'); }
+  relicPull(n) {
+    const st = this.st;
+    if (st.res.relicKeys >= n) st.res.relicKeys -= n;
+    else if (!this.spendGems(n === 1 ? RELIC_CHEST.cost1 : RELIC_CHEST.cost10)) return;
+    const out = relicPull(st, n);
+    const sum = {};
+    const relics = [];
+    for (const o of out) { if (o.relic) relics.push(o.relic); else for (const k in o.rewards) sum[k] = (sum[k] || 0) + o.rewards[k]; }
+    grant(st, sum);
+    const list = [...relics.map((it) => ({ k: 'relic', v: it.relic })), ...this.previewRewards(sum)];
+    if (relics.length) { this.ui.banner('RELIQUE !', 'Elle vous attend dans le sac', 'vip'); this.battle.flash('#fff27a', 0.6); }
+    this.ui.rewards(list, relics.length ? 'RELIQUE OBTENUE !' : 'Coffre des Reliques', { big: relics.length > 0 });
+    this.refreshAll();
   }
   fundClaimable() { return this.st.iap.fund && FUND_TIERS.some((f, i) => this.st.camp.best >= f.stage && !this.st.iap.fundClaimed.includes(i)); }
-  claimFund(i) {
-    const st = this.st;
-    if (!st.iap.fund || st.iap.fundClaimed.includes(i) || st.camp.best < FUND_TIERS[i].stage) return;
-    st.iap.fundClaimed.push(i);
-    this.give({ gems: FUND_TIERS[i].gems }, 'Fonds de croissance');
-  }
-  passClaimable() {
-    const st = this.st, t = passTier(st);
-    return PASS_TIERS.some((p) => p.t <= t && (!st.pass.free.includes(p.t) || (st.iap.pass && !st.pass.prem.includes(p.t))));
-  }
+  claimFund(i) { const st = this.st; if (!st.iap.fund || st.iap.fundClaimed.includes(i) || st.camp.best < FUND_TIERS[i].stage) return; st.iap.fundClaimed.push(i); this.give({ gems: FUND_TIERS[i].gems }, 'Fonds de croissance'); }
+  passClaimable() { const st = this.st, t = passTier(st); return PASS_TIERS.some((p) => p.t <= t && (!st.pass.free.includes(p.t) || (st.iap.pass && !st.pass.prem.includes(p.t)))); }
   claimAllPass() {
     const st = this.st, tier = passTier(st);
     const sum = {};
@@ -628,73 +715,38 @@ class Game {
       if (st.iap.pass && !st.pass.prem.includes(p.t)) { st.pass.prem.push(p.t); parts.push(p.prem); }
       for (const r of parts) for (const k in r) { n++; sum[k] = typeof r[k] === 'number' ? (sum[k] || 0) + r[k] : r[k]; }
     }
-    if (n) this.give(sum, 'Passe Royal', !!sum.skin);
+    if (n) this.give(sum, 'Passe Royal', !!sum.costume);
   }
   claimPass(t, prem) {
     const st = this.st;
     if (passTier(st) < t) return;
     const tier = PASS_TIERS[t - 1];
-    if (prem) { if (!st.iap.pass || st.pass.prem.includes(t)) return; st.pass.prem.push(t); this.give(tier.prem, 'Passe Royal', !!tier.prem.skin); }
+    if (prem) { if (!st.iap.pass || st.pass.prem.includes(t)) return; st.pass.prem.push(t); this.give(tier.prem, 'Passe Royal', !!tier.prem.costume); }
     else { if (st.pass.free.includes(t)) return; st.pass.free.push(t); this.give(tier.free, 'Passe Royal'); }
   }
   vipGiftClaimable() { return this.stats.vip > 0 && !this.st.daily.vipGift; }
-  claimVipGift() {
-    if (!this.vipGiftClaimable()) return;
-    this.st.daily.vipGift = true;
-    this.give({ gems: VIP_PERKS[this.stats.vip].dailyGems, yarn: this.stats.vip * 150 }, 'Coffre VIP');
-  }
+  claimVipGift() { if (!this.vipGiftClaimable()) return; this.st.daily.vipGift = true; this.give({ gems: VIP_PERKS[this.stats.vip].dailyGems, yarn: this.stats.vip * 150 }, 'Coffre VIP'); }
 
   // ------------------------------------------------------------------ quêtes
-  dailyClaimable() {
-    const d = this.st.daily;
-    return DAILY_QUESTS.some((q) => d.q[q.id] >= q.goal && !d.qDone.includes(q.id)) || DAILY_CHESTS.some((c, i) => d.pts >= c.pts && !d.chests.includes(i));
-  }
+  dailyClaimable() { const d = this.st.daily; return DAILY_QUESTS.some((q) => d.q[q.id] >= q.goal && !d.qDone.includes(q.id)) || DAILY_CHESTS.some((c, i) => d.pts >= c.pts && !d.chests.includes(i)); }
   loginClaimable() { return this.st.login.lastKey !== dayKey(); }
-  achValue(a) {
-    const st = this.st;
-    return a.kind === 'stage' ? st.camp.best : a.kind === 'level' ? st.hero.lvl : a.kind === 'opens' ? st.stats.opens : st.tower.floor - 1;
-  }
+  achValue(a) { const st = this.st; return a.kind === 'stage' ? st.camp.best : a.kind === 'level' ? st.hero.lvl : a.kind === 'opens' ? st.stats.opens : st.tower.floor - 1; }
   achClaimable() { return ACHIEVEMENTS.some((a) => !this.st.ach.includes(a.id) && this.achValue(a) >= a.goal); }
   questsClaimable() { return this.dailyClaimable() || this.loginClaimable() || this.achClaimable(); }
   claimQuest(id) {
-    const d = this.st.daily;
-    const q = DAILY_QUESTS.find((x) => x.id === id);
+    const d = this.st.daily, q = DAILY_QUESTS.find((x) => x.id === id);
     if (d.qDone.includes(id) || d.q[id] < q.goal) return;
-    d.qDone.push(id);
-    d.pts = Math.min(100, d.pts + q.pts);
-    addPassXp(this.st, q.pts);
-    sfx('coin');
-    this.ui.refresh();
+    d.qDone.push(id); d.pts = Math.min(100, d.pts + q.pts); addPassXp(this.st, q.pts);
+    sfx('coin'); this.ui.refresh();
   }
-  claimChest(i) {
-    const d = this.st.daily;
-    if (d.chests.includes(i) || d.pts < DAILY_CHESTS[i].pts) return;
-    d.chests.push(i);
-    this.give(DAILY_CHESTS[i].rewards, `Coffre d'activité ${DAILY_CHESTS[i].pts}`);
-  }
-  claimLogin() {
-    const L = this.st.login;
-    if (!this.loginClaimable()) return;
-    const r = LOGIN_CALENDAR[L.claimed % 7];
-    L.claimed++;
-    L.lastKey = dayKey();
-    this.give(r, `Connexion — jour ${((L.claimed - 1) % 7) + 1}`, !!r.skin);
-  }
-  claimAch(id) {
-    const a = ACHIEVEMENTS.find((x) => x.id === id);
-    if (this.st.ach.includes(id) || this.achValue(a) < a.goal) return;
-    this.st.ach.push(id);
-    this.give({ gems: a.gems }, 'Objectif atteint');
-  }
+  claimChest(i) { const d = this.st.daily; if (d.chests.includes(i) || d.pts < DAILY_CHESTS[i].pts) return; d.chests.push(i); this.give(DAILY_CHESTS[i].rewards, `Coffre d'activité ${DAILY_CHESTS[i].pts}`); }
+  claimLogin() { const L = this.st.login; if (!this.loginClaimable()) return; const r = LOGIN_CALENDAR[L.claimed % 7]; L.claimed++; L.lastKey = dayKey(); this.give(r, `Connexion — jour ${((L.claimed - 1) % 7) + 1}`, !!r.costume); }
+  claimAch(id) { const a = ACHIEVEMENTS.find((x) => x.id === id); if (this.st.ach.includes(id) || this.achValue(a) < a.goal) return; this.st.ach.push(id); this.give({ gems: a.gems }, 'Objectif atteint'); }
   onNewDay() {
-    const st = this.st;
-    const g = {};
+    const st = this.st, g = {};
     if (st.iap.monthlyUntil > Date.now()) g.gems = (g.gems || 0) + 100;
     if (st.iap.lifetime) g.gems = (g.gems || 0) + 80;
-    if (g.gems && !st.daily.cardGems) {
-      st.daily.cardGems = true;
-      setTimeout(() => this.give(g, 'Gemmes quotidiennes des cartes'), 1500);
-    }
+    if (g.gems && !st.daily.cardGems) { st.daily.cardGems = true; setTimeout(() => this.give(g, 'Gemmes quotidiennes des cartes'), 1500); }
   }
 
   // ------------------------------------------------------------------ pubs simulées
@@ -705,17 +757,13 @@ class Game {
     if (st.iap.lifetime) { done(); return; }
     let left = 3;
     const cnt = h('b.ad-count', null, String(left));
-    const close = this.ui.modal({ title: 'Vidéo bonus', body: h('div.ad-fake', null, h('div.ad-screen', null, h('img', { src: this.ui.snaps['skin_galaxy'] || '', alt: '' }), h('span', null, 'Votre publicité ici')), h('p', null, 'Récompense dans ', cnt, ' s'), h('p.muted.small', null, 'Simulation : intégrez une régie (AdMob, AppLovin…) pour de vraies vidéos.')), noClose: true });
-    const iv = setInterval(() => {
-      left--;
-      cnt.textContent = String(left);
-      if (left <= 0) { clearInterval(iv); close(); done(); }
-    }, 1000);
+    const close = this.ui.modal({ title: 'Vidéo bonus', body: h('div.ad-fake', null, h('div.ad-screen', null, h('img', { src: this.costumeURL('galaxy'), alt: '' }), h('span', null, 'Votre publicité ici')), h('p', null, 'Récompense dans ', cnt, ' s'), h('p.muted.small', null, 'Simulation : intégrez une régie (AdMob, AppLovin…) pour de vraies vidéos.')), noClose: true });
+    const iv = setInterval(() => { left--; cnt.textContent = String(left); if (left <= 0) { clearInterval(iv); close(); done(); } }, 1000);
   }
   grantAd(i) { this.give(AD_REWARDS[i], 'Bonus vidéo'); }
 
   // ------------------------------------------------------------------ donjons / tour
-  adventureDot() { return DUNGEONS.some((d) => this.st.dungeons[d.id].keys > 0) || this.st.arena.tickets > 0 || this.arenaDailyClaimable(); }
+  combatDot() { return DUNGEONS.some((d) => this.st.dungeons[d.id].keys > 0) || this.st.arena.tickets > 0 || this.arenaDailyClaimable() || this.st.war.energy > 0 || tributeAvailable(this.st); }
   startDungeon(id) {
     const ds = this.st.dungeons[id];
     if (ds.keys <= 0) return;
@@ -724,127 +772,122 @@ class Game {
     let refunded = false;
     const refund = () => { if (!refunded) { refunded = true; ds.keys++; } };
     this.startSpecial({ id, mode: 'dungeon', title: d.name, sub: 'Niveau ' + ds.lvl, banner: `${d.name} — niv. ${ds.lvl}`, onQuit: refund, onEnd: (win) => {
-      if (win) {
-        const r = dungeonReward(id, ds.lvl, this.st.camp.best);
-        ds.lvl++;
-        bumpQuest(this.st, 'dungeon', 1);
-        this.give(r, 'Donjon terminé !');
-      } else {
-        refund();
-        this.defeatModal('Le donjon résiste… Votre clé a été rendue.');
-      }
-    } }, { mode: 'dungeon', waves: dungeonWaves(id, ds.lvl, d.enemy) });
+      if (win) { const r = dungeonReward(id, ds.lvl, this.st.camp.best); ds.lvl++; bumpQuest(this.st, 'dungeon', 1); this.give(r, 'Donjon terminé !'); this.maybeWildKitten(0.05); }
+      else { refund(); this.defeatModal('Le donjon résiste… Votre clé a été rendue.'); }
+    } }, { mode: 'dungeon', waves: dungeonWaves(id, ds.lvl, d.enemy) }, id === 'gold' ? 'volcano' : id === 'yarn' ? 'neon' : 'autumn');
   }
-  sweepDungeon(id) {
-    const ds = this.st.dungeons[id];
-    if (ds.keys <= 0 || ds.lvl <= 1) return;
-    ds.keys--;
-    bumpQuest(this.st, 'dungeon', 1);
-    this.give(dungeonReward(id, ds.lvl - 1, this.st.camp.best), 'Balayage');
-  }
-  buyDungeonKey(id) {
-    const ds = this.st.dungeons[id];
-    if (ds.buys >= VIP_PERKS[this.stats.vip].dungeonBuys) return;
-    if (!this.spendGems(100 * (ds.buys + 1))) return;
-    ds.buys++; ds.keys++;
-    sfx('coin');
-    this.ui.refresh();
-  }
+  sweepDungeon(id) { const ds = this.st.dungeons[id]; if (ds.keys <= 0 || ds.lvl <= 1) return; ds.keys--; bumpQuest(this.st, 'dungeon', 1); this.give(dungeonReward(id, ds.lvl - 1, this.st.camp.best), 'Balayage'); }
+  buyDungeonKey(id) { const ds = this.st.dungeons[id]; if (ds.buys >= VIP_PERKS[this.stats.vip].dungeonBuys) return; if (!this.spendGems(100 * (ds.buys + 1))) return; ds.buys++; ds.keys++; sfx('coin'); this.ui.refresh(); }
   startTower() {
     const f = this.st.tower.floor;
     this.startSpecial({ mode: 'tower', title: 'Arbre à Chat', sub: 'Étage ' + f, banner: `Arbre à Chat — étage ${f}`, onEnd: (win) => {
-      if (win) {
-        this.st.tower.floor++;
-        this.give(towerReward(f), `Étage ${f} conquis !`, f % 10 === 0);
-      } else this.defeatModal('Ce gardien est trop fort pour le moment.');
-    } }, { mode: 'tower', waves: towerWaves(f) });
+      if (win) { this.st.tower.floor++; this.give(towerReward(f), `Étage ${f} conquis !`, f % 10 === 0); }
+      else this.defeatModal('Ce gardien est trop fort pour le moment.');
+    } }, { mode: 'tower', waves: towerWaves(f) }, 'cosmos');
   }
   defeatModal(msg) {
-    const body = h('div.col', null, h('p.center', null, msg), h('p.muted.small.center', null, 'Pour devenir plus fort : ouvrez des cartons, améliorez le carton, entraînez-vous et invoquez des pouvoirs.'));
-    this.ui.modal({ title: 'Défaite', body, buttons: [{ label: 'Entraînement', cls: 'blue', fn: () => this.ui.open('hero', 'train') }, { label: 'Offres', cls: 'gold', fn: () => this.ui.open('shop', 'offers') }] });
+    const body = h('div.col', null, h('p.center', null, msg), h('p.muted.small.center', null, 'Pour devenir plus fort : ouvrez des cartons, forgez votre équipement, fabriquez une panoplie et adoptez des chatons.'));
+    this.ui.modal({ title: 'Défaite', body, buttons: [{ label: 'Atelier', cls: 'blue', fn: () => this.ui.open('atelier') }, { label: 'Offres', cls: 'gold', fn: () => this.ui.open('shop', 'offers') }] });
   }
 
-  // ------------------------------------------------------------------ arène
-  days() { return (Date.now() - this.st.created) / 864e5; }
-  botPower(b) {
-    const base = serverPower(this.days());
-    return base * b.factor * b.grow;
+  // ------------------------------------------------------------------ PvP : rival générique
+  rivalDef(name, power, loadout, vip) {
+    const S = statsFromPower(power, this.stats);
+    const tierSkills = SKILLS.filter((s) => s.mult && s.r <= Math.min(6, 2 + Math.floor(Math.log10(Math.max(10, power)) / 2)));
+    const skills = [pick(tierSkills), pick(tierSkills)].filter((v, i, a) => a.indexOf(v) === i).map((s) => ({ ...s, lvl: 1, lm: 1 }));
+    const kittens = loadout.kittens.map((id) => { const k = KITTEN_BY_ID[id]; return { id: k.id, name: k.name, el: k.el, r: k.r, look: k.look, mult: [0.25, 0.35, 0.5, 0.7, 1, 1.5, 2.3, 3.5, 5.5][k.r] }; });
+    return { name, appearance: loadout.ap, gear: loadout.gear, stats: { ...S, hp: S.hp * 1.05, crit: 10, critDmg: 60, combo: 4, counter: 3, dodge: 3, lifesteal: 0, stun: 0 }, skills, kittens, weaponColor: RCOL[loadout.gear.weapon.r], perks: {}, vip };
   }
-  arenaBoard() {
-    const st = this.st;
-    const byId = Object.fromEntries(st.arena.bots.map((b) => [b.id, b]));
-    return st.arena.order.map((id, i) => {
-      if (id === 'me') return { me: true, id, rank: i + 1, name: 'Minou (vous)', power: this.stats.power, vip: this.stats.vip, skin: st.skins.current };
-      const b = byId[id];
-      return { id, rank: i + 1, name: b.name, power: this.botPower(b), vip: b.vip, skin: b.skin };
-    });
-  }
-  arenaOpponents() {
-    const lb = this.arenaBoard();
-    const me = lb.find((x) => x.me);
-    const above = lb.filter((x) => !x.me && x.rank < me.rank && x.rank >= me.rank - 8);
-    let pool = above.length ? above : lb.filter((x) => !x.me).slice(0, 4);
-    // 1 facile, 1 moyen, 1 difficile
-    pool = pool.sort((a, b) => a.power - b.power);
-    if (pool.length <= 3) return pool;
-    return [pool[0], pool[Math.floor(pool.length / 2)], pool[pool.length - 1]];
-  }
+  arenaBoard() { return arenaBoard(this.st, this.stats); }
+  arenaOpponents() { return arenaOpponents(this.st, this.stats); }
   arenaFight(botId) {
     const st = this.st;
     if (st.arena.tickets <= 0) { this.ui.toast('Plus de tickets d\'arène', 'warn'); return; }
     const opp = this.arenaBoard().find((x) => x.id === botId);
     st.arena.tickets--;
     bumpQuest(st, 'arena', 1);
-    const S = statsFromPower(opp.power, this.stats);
-    const def = { rival: true, kind: 'cat', name: opp.name, skin: opp.skin, hp: S.hp * 1.1, atk: S.atk * 0.9, def: S.def, interval: 1.1, crit: 12, critDmg: 60 };
-    const oldRank = this.arenaBoard().find((x) => x.me).rank;
+    const oldRank = myRank(st);
+    const rival = this.rivalDef(opp.name, opp.power, botLoadout(opp.bot), opp.vip);
     this.startSpecial({ mode: 'arena', title: 'Arène', sub: 'vs ' + opp.name, banner: `Arène — ${opp.name}`, onEnd: (win) => {
-      const order = st.arena.order;
-      const mi = order.indexOf('me'), oi = order.indexOf(botId);
-      if (win && oi < mi) { order[mi] = botId; order[oi] = 'me'; }
-      const newRank = order.indexOf('me') + 1;
+      const newRank = win ? arenaSwap(st, botId) : oldRank;
       st.res.arenaCoins += win ? 30 : 10;
       if (win) st.stats.arenaWins++;
-      const body = h('div.col.center', null,
-        h('div.arena-res', { cls: win ? 'win' : 'lose' }, win ? 'VICTOIRE' : 'DÉFAITE'),
-        h('p', null, `Rang : #${oldRank} → #${newRank}`),
-        h('div.rewards', null, this.ui.rewardChip({ k: 'arenaCoins', v: win ? 30 : 10 })),
-      );
-      this.ui.modal({ title: 'Arène', body, buttons: [{ label: 'Rejouer', cls: 'gold', fn: () => this.ui.open('adventure', 'arena') }, { label: 'OK', cls: 'blue' }], rays: win ? '#ffd23f' : null });
-    } }, { mode: 'arena', waves: [[def]] });
+      const body = h('div.col.center', null, h('div.arena-res', { cls: win ? 'win' : 'lose' }, win ? 'VICTOIRE' : 'DÉFAITE'), h('p', null, `Rang : #${oldRank} → #${newRank}`), h('div.rewards', null, this.ui.rewardChip({ k: 'arenaCoins', v: win ? 30 : 10 })));
+      this.ui.modal({ title: 'Arène', body, buttons: [{ label: 'Rejouer', cls: 'gold', fn: () => this.ui.open('combat', 'arena') }, { label: 'OK', cls: 'blue' }], rays: win ? '#ffd23f' : null });
+    } }, { mode: 'arena', rival }, 'arena');
   }
   buyArenaTicket() {
     const st = this.st;
     if (st.arena.buys >= VIP_PERKS[this.stats.vip].arenaBuys) { this.ui.toast(`Achats de tickets max atteints (VIP ${this.stats.vip})`, 'vip'); return; }
     if (!this.spendGems(50 + st.arena.buys * 25)) return;
-    st.arena.buys++; st.arena.tickets++;
-    sfx('coin');
-    this.ui.refresh();
+    st.arena.buys++; st.arena.tickets++; sfx('coin'); this.ui.refresh();
   }
-  arenaDailyClaimable() { return this.st.arena.claimedKey !== dayKey() && this.st.arena.order.indexOf('me') < 60; }
-  claimArenaDaily() {
-    if (!this.arenaDailyClaimable()) return;
-    const rank = this.st.arena.order.indexOf('me') + 1;
-    this.st.arena.claimedKey = dayKey();
-    this.give({ gems: arenaDailyGems(rank), arenaCoins: 300 - Math.min(250, rank * 4) }, `Récompense rang #${rank}`);
-  }
+  arenaDailyClaimable() { return this.st.arena.claimedKey !== dayKey() && myRank(this.st) < 100; }
+  claimArenaDaily() { if (!this.arenaDailyClaimable()) return; const rank = myRank(this.st); this.st.arena.claimedKey = dayKey(); this.give({ gems: arenaDailyGems(rank), arenaCoins: 300 - Math.min(250, rank * 3) }, `Récompense rang #${rank}`); }
   arenaShopBuy(id) {
-    const st = this.st;
-    const a = ARENA_SHOP.find((x) => x.id === id);
-    const n = st.arena.shop[id] || 0;
+    const st = this.st, a = ARENA_SHOP.find((x) => x.id === id), n = st.arena.shop[id] || 0;
     if (n >= a.limit) return;
     if (st.res.arenaCoins < a.cost) { sfx('error'); this.ui.toast('Pas assez de médailles', 'warn'); return; }
-    st.res.arenaCoins -= a.cost;
-    st.arena.shop[id] = n + 1;
-    this.give(a.rewards, 'Boutique d\'arène', !!a.rewards.skin);
+    st.res.arenaCoins -= a.cost; st.arena.shop[id] = n + 1;
+    this.give(a.rewards, 'Boutique d\'arène', !!a.rewards.costume);
+  }
+
+  // ------------------------------------------------------------------ Guerre des Gouttières
+  handleWarEvents(events) {
+    for (const e of events) {
+      if (e.season) { const r = warSeasonReward(e.place); setTimeout(() => this.give(r, `Guerre des Gouttières : ${e.place}e place`, e.place === 1), 2000); }
+      else if (e.capture && e.from === 'me') this.ui.toast(`${CLAN_BY_ID[e.by].name} vous ont pris « ${TERRITORIES.find((t) => t.id === e.t).name} » !`, 'warn');
+    }
+  }
+  warTerritory(tid) {
+    const st = this.st, t = TERRITORIES.find((x) => x.id === tid), T = st.war.terr[tid];
+    if (T.owner === 'me') { this.ui.toast(`« ${t.name} » appartient à votre clan (+${t.pts} pts/h)`); return; }
+    const power = defenderPower(st, t);
+    const lo = defenderLoadout(st, t);
+    const body = h('div.col.center', null,
+      h('img.def-face', { src: catPortraitURL(lo.ap, lo.gear, 110), alt: '' }),
+      h('p', null, `${defenderName(st, t)} garde « ${t.name} » pour les ${CLAN_BY_ID[T.owner].name}.`),
+      h('p', { html: `${icon('power')} ${fmt(power)} · gardiens restants : ${T.hp}/3` }),
+      h('p.small.muted', null, `Victoire : +12 écussons, +2 insignes. Capture : +${t.pts * 10} points de clan.`));
+    this.ui.modal({ title: t.name, body, buttons: [{ label: 'Attaquer', sub: `${icon('combat')} 1 énergie (${st.war.energy})`, cls: power < this.stats.power ? 'green' : 'red', disabled: st.war.energy <= 0, fn: () => this.warAttack(tid) }] });
+  }
+  warAttack(tid) {
+    const st = this.st, w = st.war, t = TERRITORIES.find((x) => x.id === tid), T = w.terr[tid];
+    if (w.energy <= 0) { this.ui.toast('Plus d\'énergie de guerre', 'warn'); return; }
+    w.energy--;
+    bumpQuest(st, 'war', 1);
+    const rival = this.rivalDef(defenderName(st, t), defenderPower(st, t), defenderLoadout(st, t), 0);
+    this.startSpecial({ mode: 'war', title: 'Guerre des Gouttières', sub: t.name, banner: `Gouttières — ${t.name}`, onEnd: (win) => {
+      if (!win) { this.defeatModal('Le gardien vous a repoussé du toit !'); return; }
+      T.hp--;
+      w.wins++;
+      const rw = { warCoins: 12, gutterBadge: 2 };
+      let title = 'Gardien vaincu !';
+      if (T.hp <= 0) { T.owner = 'me'; T.hp = 3; T.seed = Math.floor(Math.random() * 1e9); w.points.me += t.pts * 10; rw.warCoins += 30; rw.gems = 50; title = `« ${t.name} » capturé !`; }
+      this.give(rw, title, T.owner === 'me');
+    } }, { mode: 'war', rival }, 'roofs');
+  }
+  warBuyEnergy() { const st = this.st; if (!this.spendGems(warBuyCost(st))) return; st.war.buys++; st.war.energy++; sfx('coin'); this.ui.refresh(); }
+  claimTribute() {
+    const st = this.st;
+    if (!tributeAvailable(st)) return;
+    st.war.tributeKey = dayKey();
+    const n = ownedTerritories(st).reduce((a, t) => a + t.pts, 0);
+    this.give({ gold: n * 0.5, gutterBadge: n * 2, warCoins: n * 5 }, 'Tribut des toits');
+  }
+  warShopBuy(id) {
+    const st = this.st, a = WAR_SHOP.find((x) => x.id === id), n = st.war.shop[id] || 0;
+    if (n >= a.limit) return;
+    if (st.res.warCoins < a.cost) { sfx('error'); this.ui.toast('Pas assez d\'écussons', 'warn'); return; }
+    st.res.warCoins -= a.cost; st.war.shop[id] = n + 1;
+    this.give(a.rewards, 'Boutique de guerre', !!a.rewards.costume);
   }
 
   // ------------------------------------------------------------------ paramètres
   applyQuality() {
     const q = this.st.settings.quality === 'auto' ? this.autoQ.level : this.st.settings.quality;
-    this.world.setQuality(q);
-    this.fx.lowFx = q === 'low';
-    this.fx.setScale();
+    this.stage.setQuality(q);
+    this.battle.fx.low = q === 'low';
   }
   setSetting(k, v) {
     this.st.settings[k] = v;
@@ -857,6 +900,8 @@ class Game {
     wipeSave();
     this.st = defaultState();
     this.st.arena.bots = makeBots(this.st.seed);
+    this.st = loadState(this.st);
+    ensureMarket(this.st);
     this.autoBox = false;
     this.ui.closeSheet();
     this.ui.closeAllModals();
@@ -869,12 +914,12 @@ class Game {
   tutoCheck() {
     const st = this.st, ui = this.ui;
     if (st.tutorial === 0 && st.stats.opens >= 12) st.tutorial = 1;
-    if (st.tutorial === 1 && st.skills.pulls > 0) st.tutorial = 2;
-    if (st.tutorial === 2 && st.pets.pulls > 0) st.tutorial = 3;
+    if (st.tutorial === 1 && st.kittens.pulls > 0) st.tutorial = 2;
+    if (st.tutorial === 2 && st.skills.pulls > 0) st.tutorial = 3;
     if (ui.modalRoot.children.length) { ui.tutorial(null); return; }
     if (st.tutorial === 0) ui.tutorial(ui.boxBtn, 'Touchez le carton !');
-    else if (st.tutorial === 1 && st.res.feathers >= 1 && !(ui.sheet && ui.sheet.name === 'skills')) ui.tutorial(ui.navBtns.skills, 'Invoquez un pouvoir');
-    else if (st.tutorial === 2 && st.res.eggs >= 1 && st.skills.pulls > 0 && !(ui.sheet && ui.sheet.name === 'pets')) ui.tutorial(ui.navBtns.pets, 'Faites éclore un œuf');
+    else if (st.tutorial === 1 && st.res.eggs >= 1 && !(ui.sheet && ui.sheet.name === 'kittens')) ui.tutorial(ui.navBtns.kittens, 'Adoptez un chaton');
+    else if (st.tutorial === 2 && st.res.feathers >= 1 && !(ui.sheet && ui.sheet.name === 'hero')) ui.tutorial(ui.navBtns.hero, 'Invoquez un pouvoir');
     else ui.tutorial(null);
   }
 
@@ -885,7 +930,6 @@ class Game {
     this.last = t;
     if (dt > 0.1) dt = 0.1;
     if (dt <= 0) return;
-    // mesure FPS / qualité auto
     this.fps = this.fps * 0.95 + (1 / dt) * 0.05;
     const aq = this.autoQ;
     aq.t += dt;
@@ -894,12 +938,11 @@ class Game {
       if (this.fps < 38 && aq.level !== 'low') { aq.level = aq.level === 'high' ? 'medium' : 'low'; this.applyQuality(); }
     }
     this.battle.update(dt);
-    this.fx.update(dt * this.battle.speed);
-    if (this.world.look) this.fx.ambient(this.world.look.ambient, dt);
-    this.world.update(dt);
-    this.world.render();
+    this.battle.render(dt);
+    const B = this.battle;
+    const boss = B.units.find((u) => u.boss && !u.dead);
+    if (boss) this.onBossHp(Math.max(0, boss.hp / boss.maxHp), boss.hp);
     this.ui.updateSkillCds();
-    // ouverture automatique
     if (this.autoBox) {
       this.autoT += dt;
       const iv = this.stats.vip >= 5 ? 0.35 : this.stats.vip >= 1 ? 0.5 : 0.7;
@@ -917,6 +960,12 @@ class Game {
       if (this.st.iap.flash && this.st.iap.flash.until < Date.now()) { this.st.iap.flash = null; this.ui.renderSide(); }
       this.sideT = (this.sideT || 0) + 1;
       if (this.sideT % 3 === 0) this.ui.renderSide();
+      if (this.sideT % 5 === 0) {
+        const sold = tickMarket(this.st);
+        for (const s of sold) this.ui.toast(`Vendu : ${RES_BY_ID[s.id].name} x${s.lot} (+${fmt(s.price)} or)`, 'gold');
+        if (sold.length) sfx('coin');
+      }
+      if (this.sideT % 60 === 0) this.handleWarEvents(warTick(this.st));
       this.tutoCheck();
     }
   }

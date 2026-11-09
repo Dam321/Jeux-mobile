@@ -1,23 +1,35 @@
-// Logique d'économie : tirages, récompenses, coûts (pur, testable sous Node)
+// Logique d'économie : tirages, carton, butin, craft, forgemagie, reliques (pur, testable sous Node)
 import {
-  boxWeights, SLOTS, RARITY_SUBS, SUBSTAT_KEYS, SUBSTATS, xpToNext, recycleGold, boxUpgradeGold,
+  boxWeights, SLOTS, SLOT_BY_ID, RARITY_SUBS, SUBSTAT_KEYS, SUBSTATS, xpToNext, recycleGold, boxUpgradeGold,
   boxUpgradeSeconds, BOX_MAX_LEVEL, SKILLS, SKILL_RARITY_ODDS, SKILL_PITY_LEG, SKILL_PITY_DIV,
-  PETS, PET_RARITY_ODDS, PET_PITY_LEG, dupNeed, trainingCost, TRAININGS, idlePerHour, VIP_PERKS, vipLevel,
-  OFFLINE_CAP_H, DAILY_QUESTS, PASS_XP_PER_TIER,
+  dupNeed, trainingCost, TRAININGS, idlePerHour, VIP_PERKS, vipLevel, OFFLINE_CAP_H, DAILY_QUESTS, PASS_XP_PER_TIER, STAT_GROWTH,
 } from './config.js';
+import {
+  KITTENS, KITTEN_ODDS, KITTEN_PITY_LEG, KITTEN_PITY_MYTH, RES_BY_ID, ENEMY_DROPS, DROP_CHANCE, GLOBAL_DROPS, SETS, SET_BY_ID,
+  artisanXpNext, craftXp, craftGold, FORGE_MAX, FORGE_RATES, forgeCost, breakRunes, RELICS, RELIC_BY_ID, RELIC_CHEST, RELIC_CONSOLATION, BOX_RELIC_CHANCE, LOOK_UNLOCK,
+} from './content.js';
 import { weightedPick, randi, rand, pick, uid } from './util.js';
-import { itemPower } from './stats.js';
+import { itemPower, computeStats } from './stats.js';
 
-// ------------------------------------------------------------- Carton
-export function rollItem(st) {
-  const r = weightedPick(boxWeights(st.box.lvl));
-  const slot = pick(SLOTS).id;
-  const l = Math.max(1, st.hero.lvl + randi(-2, 1));
-  const n = RARITY_SUBS[r];
-  const keys = [...SUBSTAT_KEYS].sort(() => Math.random() - 0.5).slice(0, n);
-  const subs = keys.map((k) => ({ k, v: +(SUBSTATS[k].base * (0.6 + Math.random() * 0.4) * (1 + 0.45 * r)).toFixed(1) }));
-  return { id: uid(), slot, r, l, q: +rand(0.92, 1.08).toFixed(3), subs };
+// ------------------------------------------------------------- objets
+function rollSubs(r, n, guaranteed) {
+  const keys = [...SUBSTAT_KEYS].sort(() => Math.random() - 0.5);
+  if (guaranteed) { keys.splice(keys.indexOf(guaranteed), 1); keys.unshift(guaranteed); }
+  return keys.slice(0, n).map((k) => ({ k, v: +(SUBSTATS[k].base * (0.6 + Math.random() * 0.4) * (1 + 0.45 * r)).toFixed(1) }));
 }
+export function makeRelic(st, id) {
+  const R = RELIC_BY_ID[id];
+  return { id: uid(), slot: R.slot, base: R.base, r: 8, l: st.hero.lvl, q: 1.1, subs: rollSubs(8, 4), relic: id };
+}
+export function rollItem(st) {
+  if (Math.random() < BOX_RELIC_CHANCE) return makeRelic(st, pick(RELICS).id);
+  const r = weightedPick(boxWeights(st.box.lvl));
+  const slot = pick(SLOTS);
+  const base = pick(Object.keys(slot.bases));
+  const l = Math.max(1, st.hero.lvl + randi(-2, 1));
+  return { id: uid(), slot: slot.id, base, r, l, q: +rand(0.92, 1.08).toFixed(3), subs: rollSubs(r, RARITY_SUBS[r]) };
+}
+export function keepable(it) { return !!(it && (it.set || it.relic || (it.upg || 0) > 0)); }
 
 export function gainHeroXp(st, xp) {
   st.hero.xp += xp;
@@ -30,7 +42,36 @@ export function gainHeroXp(st, xp) {
   return ups;
 }
 
-// Ouvre n cartons. mode 'manual' (x1 : renvoie l'objet à comparer) ou 'auto' (équipe le meilleur, recycle le reste)
+export function bagSize(st) { return VIP_PERKS[vipLevel(st.iap.vip)].bag; }
+// Range un objet dans le sac ; s'il est plein, l'objet le plus faible est recyclé
+export function addToBag(st, it) {
+  st.bag.push(it);
+  let gold = 0;
+  while (st.bag.length > bagSize(st)) {
+    let worst = 0;
+    st.bag.forEach((x, i) => { if (!x.relic && itemPower(x, st.hero.lvl) < itemPower(st.bag[worst], st.hero.lvl)) worst = i; });
+    const [x] = st.bag.splice(worst, 1);
+    gold += recycleGold(x);
+  }
+  st.res.gold += gold;
+  return gold;
+}
+// Équipe un objet ; l'ancien va au sac s'il est précieux, sinon il est recyclé (or ou runes)
+export function equipItem(st, it, breakOld = false) {
+  const idx = st.bag.findIndex((x) => x.id === it.id);
+  if (idx >= 0) st.bag.splice(idx, 1);
+  const cur = st.gear[it.slot];
+  st.gear[it.slot] = it;
+  if (!cur) return { gold: 0, runes: 0 };
+  if (keepable(cur)) { addToBag(st, cur); return { gold: 0, runes: 0 }; }
+  return disposeItem(st, cur, breakOld);
+}
+export function disposeItem(st, it, asRunes) {
+  if (asRunes) { const n = breakRunes(it); st.mats.rune += n; return { gold: 0, runes: n }; }
+  const g = recycleGold(it); st.res.gold += g; return { gold: g, runes: 0 };
+}
+
+// Ouvre n cartons (auto : équipe le meilleur, recycle/brise le reste)
 export function openBoxes(st, n, autoEquip = true) {
   n = Math.min(n, st.res.yarn);
   if (n <= 0) return null;
@@ -39,22 +80,23 @@ export function openBoxes(st, n, autoEquip = true) {
   bumpQuest(st, 'open', n);
   addPassXp(st, n * 0.05);
   const items = [];
-  let gold = 0;
-  const equipped = [];
+  let gold = 0, runes = 0;
+  const equipped = [], relics = [];
   for (let i = 0; i < n; i++) items.push(rollItem(st));
   const lvUps = gainHeroXp(st, n);
   if (autoEquip) {
     for (const it of items) {
+      if (it.relic) { relics.push(it); const cur = st.gear[it.slot]; if (!cur || itemPower(it, st.hero.lvl) > itemPower(cur, st.hero.lvl)) { equipItem(st, it); equipped.push(it); } else addToBag(st, it); continue; }
       const cur = st.gear[it.slot];
-      if (!cur || itemPower(it) > itemPower(cur)) {
-        if (cur) gold += recycleGold(cur);
-        st.gear[it.slot] = it;
+      const margin = keepable(cur) ? 1.15 : 1; // une pièce de panoplie / forgée / relique n'est remplacée que si nettement meilleure
+      if (!cur || itemPower(it, st.hero.lvl) > itemPower(cur, st.hero.lvl) * margin) {
+        const d = equipItem(st, it, st.box.autoBreak);
+        gold += d.gold; runes += d.runes;
         equipped.push(it);
-      } else gold += recycleGold(it);
+      } else { const d = disposeItem(st, it, st.box.autoBreak); gold += d.gold; runes += d.runes; }
     }
-    st.res.gold += gold;
   }
-  return { items, gold, equipped, lvUps };
+  return { items, gold, runes, equipped, relics, lvUps };
 }
 
 export function boxUpgradeInfo(st) {
@@ -63,49 +105,63 @@ export function boxUpgradeInfo(st) {
   return { gold: boxUpgradeGold(lvl), secs: boxUpgradeSeconds(lvl), busy: st.box.upUntil > 0, left: Math.max(0, (st.box.upUntil - Date.now()) / 1000) };
 }
 
-// ------------------------------------------------------------- Gacha compétences / compagnons
-function rollGacha(odds, pool, pity, pityLeg, pityDiv) {
-  let r = weightedPick(odds);
-  if (pityDiv && pity.div + 1 >= pityDiv) r = 6;
-  else if (pity.leg + 1 >= pityLeg && r < 4) r = 4;
-  pity.leg = r >= 4 ? 0 : pity.leg + 1;
-  if (pityDiv) pity.div = r >= 6 ? 0 : pity.div + 1;
-  const cands = pool.filter((x) => x.r === r);
-  return pick(cands.length ? cands : pool);
+// ------------------------------------------------------------- pouvoirs (gacha à plumes)
+function addOwned(map, id) {
+  if (!map[id]) { map[id] = { lvl: 1, copies: 0 }; return true; }
+  map[id].copies++;
+  return false;
 }
-
 export function summonSkills(st, n) {
   const out = [];
-  const pity = { leg: st.skills.pityLeg, div: st.skills.pityDiv };
   for (let i = 0; i < n; i++) {
-    const sk = rollGacha(SKILL_RARITY_ODDS, SKILLS, pity, SKILL_PITY_LEG, SKILL_PITY_DIV);
+    let r = weightedPick(SKILL_RARITY_ODDS);
+    if (st.skills.pityDiv + 1 >= SKILL_PITY_DIV) r = 6;
+    else if (st.skills.pityLeg + 1 >= SKILL_PITY_LEG && r < 4) r = 4;
+    st.skills.pityLeg = r >= 4 ? 0 : st.skills.pityLeg + 1;
+    st.skills.pityDiv = r >= 6 ? 0 : st.skills.pityDiv + 1;
+    const c = SKILLS.filter((x) => x.r === r);
+    const sk = pick(c.length ? c : SKILLS);
     out.push(sk);
     addOwned(st.skills.owned, sk.id);
   }
-  st.skills.pityLeg = pity.leg; st.skills.pityDiv = pity.div;
   st.skills.pulls += n;
   bumpQuest(st, 'summon', n);
   autoEquipSkills(st);
   return out;
 }
 
-export function summonPets(st, n) {
-  const out = [];
-  const pity = { leg: st.pets.pityLeg, div: 0 };
-  for (let i = 0; i < n; i++) {
-    const p = rollGacha(PET_RARITY_ODDS, PETS, pity, PET_PITY_LEG, 0);
-    out.push(p);
-    addOwned(st.pets.owned, p.id);
+// ------------------------------------------------------------- chatons (gacha à paniers + butin sauvage)
+function rollKittenRarity(st, usePity) {
+  let r = weightedPick(KITTEN_ODDS);
+  if (usePity) {
+    if (st.kittens.pityMyth + 1 >= KITTEN_PITY_MYTH && r < 5) r = 5;
+    else if (st.kittens.pityLeg + 1 >= KITTEN_PITY_LEG && r < 4) r = 4;
+    st.kittens.pityLeg = r >= 4 ? 0 : st.kittens.pityLeg + 1;
+    st.kittens.pityMyth = r >= 5 ? 0 : st.kittens.pityMyth + 1;
   }
-  st.pets.pityLeg = pity.leg;
-  st.pets.pulls += n;
-  autoEquipPets(st);
+  const c = KITTENS.filter((k) => k.r === r);
+  return pick(c.length ? c : KITTENS);
+}
+export function giveKitten(st, id) {
+  const isNew = addOwned(st.kittens.owned, id);
+  if (!st.kittens.seen.includes(id)) st.kittens.seen.push(id);
+  if (isNew) st.stats.kittensFound++;
+  autoEquipKittens(st);
+  return isNew;
+}
+export function summonKittens(st, n) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const k = rollKittenRarity(st, true);
+    out.push({ k, isNew: giveKitten(st, k.id) });
+  }
+  st.kittens.pulls += n;
   return out;
 }
-
-function addOwned(map, id) {
-  if (!map[id]) map[id] = { lvl: 1, copies: 0 };
-  else map[id].copies++;
+// Chaton sauvage trouvé en combat (mêmes probabilités, sans garantie)
+export function wildKitten(st) {
+  const k = rollKittenRarity(st, false);
+  return { k, isNew: giveKitten(st, k.id) };
 }
 
 export function canLevel(entry) { return entry && entry.copies >= dupNeed(entry.lvl); }
@@ -114,6 +170,15 @@ export function levelUp(entry) {
   entry.copies -= dupNeed(entry.lvl);
   entry.lvl++;
   return true;
+}
+// Lait doré : remplace les copies manquantes (1 lait = 1 copie)
+export function milkNeeded(entry) { return Math.max(0, dupNeed(entry.lvl) - entry.copies); }
+export function levelUpWithMilk(st, entry) {
+  const need = milkNeeded(entry);
+  if (st.res.milk < need) return false;
+  st.res.milk -= need;
+  entry.copies += need;
+  return levelUp(entry);
 }
 
 export function autoEquipSkills(st) {
@@ -125,17 +190,17 @@ export function autoEquipSkills(st) {
     if (best) eq[i] = best.id;
   }
 }
-export function autoEquipPets(st) {
-  const slots = VIP_PERKS[vipLevel(st.iap.vip)].petSlots;
-  const eq = st.pets.equipped;
+export function autoEquipKittens(st) {
+  const slots = VIP_PERKS[vipLevel(st.iap.vip)].kittenSlots;
+  const eq = st.kittens.equipped;
   for (let i = 0; i < slots; i++) {
     if (eq[i]) continue;
-    const best = PETS.filter((p) => st.pets.owned[p.id] && !eq.includes(p.id)).sort((a, b) => b.r - a.r)[0];
+    const best = KITTENS.filter((k) => st.kittens.owned[k.id] && !eq.includes(k.id)).sort((a, b) => b.r - a.r)[0];
     if (best) eq[i] = best.id;
   }
 }
 
-// ------------------------------------------------------------- Entraînement
+// ------------------------------------------------------------- entraînement
 export function train(st, id) {
   const t = TRAININGS.find((x) => x.id === id);
   const lvl = st.train[id];
@@ -148,56 +213,173 @@ export function train(st, id) {
   return true;
 }
 
-// ------------------------------------------------------------- Revenus passifs
-export function idleRate(st) {
+// ------------------------------------------------------------- revenus passifs
+export function idleRate(st, S) {
   const perks = VIP_PERKS[vipLevel(st.iap.vip)];
   const base = idlePerHour(st.camp.best);
+  const gp = (S || computeStats(st)).goldPct || 0;
   let mult = 1 + perks.idle / 100;
   if (st.iap.monthlyUntil > Date.now()) mult += 0.1;
   if (st.iap.lifetime) mult += 0.25;
-  return { gold: base.gold * mult, yarn: base.yarn * mult, mult };
+  return { gold: base.gold * mult * (1 + gp / 100), yarn: base.yarn * mult, mult };
 }
 export function idleCapH(st) {
   return VIP_PERKS[vipLevel(st.iap.vip)].offlineH || OFFLINE_CAP_H;
 }
-export function idlePending(st) {
+export function idlePending(st, S) {
   const h = Math.min(idleCapH(st), (Date.now() - st.idleSince) / 3600000);
-  const r = idleRate(st);
+  const r = idleRate(st, S);
   return { hours: h, gold: Math.floor(r.gold * h), yarn: Math.floor(r.yarn * h) };
 }
 
-// ------------------------------------------------------------- Récompenses génériques
-// rewards : { gold: heures d'or passif, goldRaw, gems, yarn, feathers, eggs, food, skin, pet, skill, speedH, speedM, arenaCoins }
+// ------------------------------------------------------------- butin des ennemis
+export function luckMult(st, S) {
+  const l = (S || computeStats(st)).luck || 0;
+  const clover = st.boost.cloverUntil > Date.now() ? 2 : 1;
+  return (1 + l / 100) * clover;
+}
+export function rollDrops(st, kind, boss, bossDrop, lm) {
+  const out = {};
+  const d = ENEMY_DROPS[kind];
+  if (d) {
+    if (Math.random() < Math.min(0.95, DROP_CHANCE.common * lm)) out[d[0]] = (out[d[0]] || 0) + randi(1, boss ? 6 : 2);
+    if (Math.random() < Math.min(0.9, DROP_CHANCE.rare * lm * (boss ? 6 : 1))) out[d[1]] = (out[d[1]] || 0) + 1;
+  }
+  if (boss && bossDrop && Math.random() < Math.min(0.95, DROP_CHANCE.boss * lm)) out[bossDrop] = (out[bossDrop] || 0) + 1;
+  for (const [id, p] of GLOBAL_DROPS) if (Math.random() < p * lm * (boss ? 5 : 1)) out[id] = (out[id] || 0) + 1;
+  for (const id in out) st.mats[id] = (st.mats[id] || 0) + out[id];
+  return out;
+}
+
+// ------------------------------------------------------------- atelier (panoplies)
+export function craftCheck(st, setId, slot) {
+  const S = SET_BY_ID[setId];
+  const lvl = Math.max(S.lvl, st.hero.lvl);
+  const gold = craftGold(lvl, S.r);
+  const missing = [];
+  for (const [id, n] of S.cost) if ((st.mats[id] || 0) < n) missing.push({ id, have: st.mats[id] || 0, need: n });
+  const artisanOk = st.artisan.lvl >= S.artisan;
+  const heroOk = st.hero.lvl >= S.lvl;
+  return { S, lvl, gold, missing, artisanOk, heroOk, ok: !missing.length && artisanOk && heroOk && st.res.gold >= gold };
+}
+export function craft(st, setId, slot) {
+  const c = craftCheck(st, setId, slot);
+  if (!c.ok) return null;
+  const S = c.S;
+  for (const [id, n] of S.cost) st.mats[id] -= n;
+  st.res.gold -= c.gold;
+  const q = +(0.85 + Math.pow(Math.random(), 1.6) * 0.37).toFixed(3); // jet : 0.85 → 1.22 (les jets parfaits sont rares)
+  const it = { id: uid(), slot, base: S.pieces[slot], r: S.r, l: c.lvl, q, subs: rollSubs(S.r, RARITY_SUBS[S.r] + 1), set: setId, upg: 0 };
+  st.artisan.xp += craftXp(S);
+  let ups = 0;
+  while (st.artisan.lvl < 100 && st.artisan.xp >= artisanXpNext(st.artisan.lvl)) { st.artisan.xp -= artisanXpNext(st.artisan.lvl); st.artisan.lvl++; ups++; }
+  st.stats.crafts++;
+  bumpQuest(st, 'craft', 1);
+  addToBag(st, it);
+  return { it, ups, perfect: q >= 1.18 };
+}
+
+// ------------------------------------------------------------- forgemagie
+export function forgeChance(item, scroll) {
+  const n = item.upg || 0;
+  if (n >= FORGE_MAX) return 0;
+  return Math.min(100, FORGE_RATES[n] + (scroll ? 15 : 0));
+}
+export function forge(st, item, useStone, useScroll) {
+  const n = item.upg || 0;
+  if (n >= FORGE_MAX) return null;
+  const c = forgeCost(item);
+  if (st.mats.rune < c.rune || st.res.gold < c.gold) return null;
+  if (useStone && st.res.stone < 1) useStone = false;
+  if (useScroll && st.res.scroll < 1) useScroll = false;
+  st.mats.rune -= c.rune;
+  st.res.gold -= c.gold;
+  if (useStone) st.res.stone--;
+  if (useScroll) st.res.scroll--;
+  const chance = forgeChance(item, useScroll);
+  bumpQuest(st, 'craft', 1);
+  st.artisan.xp += 8 + n * 4;
+  while (st.artisan.lvl < 100 && st.artisan.xp >= artisanXpNext(st.artisan.lvl)) { st.artisan.xp -= artisanXpNext(st.artisan.lvl); st.artisan.lvl++; }
+  if (Math.random() * 100 < chance) { item.upg = n + 1; return { ok: true, upg: item.upg, chance }; }
+  let down = false;
+  if (n >= 7 && !useStone) { item.upg = n - 1; down = true; }
+  return { ok: false, down, upg: item.upg, chance };
+}
+export function breakItem(st, item) {
+  const idx = st.bag.findIndex((x) => x.id === item.id);
+  if (idx < 0 || item.relic) return 0;
+  st.bag.splice(idx, 1);
+  const n = breakRunes(item) * (1 + (item.upg || 0));
+  st.mats.rune += n;
+  return n;
+}
+
+// ------------------------------------------------------------- coffre des reliques
+export function relicPull(st, n) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    st.relic.pulls++;
+    st.relic.pity++;
+    if (st.relic.pity >= RELIC_CHEST.pity || Math.random() * 100 < RELIC_CHEST.relicPct) {
+      st.relic.pity = 0;
+      const R = pick(RELICS);
+      const it = makeRelic(st, R.id);
+      addToBag(st, it);
+      out.push({ relic: it });
+    } else {
+      const rw = RELIC_CONSOLATION[weightedPick(RELIC_CONSOLATION.map((c) => c.p))].rewards;
+      out.push({ rewards: rw });
+    }
+  }
+  return out;
+}
+
+// ------------------------------------------------------------- apparence
+export function lookPrice(cat, id) { return LOOK_UNLOCK[cat] ? LOOK_UNLOCK[cat][id] : 0; }
+export function lookUnlocked(st, cat, id) {
+  const p = lookPrice(cat, id);
+  if (p === 0 || p === undefined) return true;
+  if (st.unlocks.includes(cat + ':' + id)) return true;
+  if (typeof p === 'string' && p.startsWith('vip')) return vipLevel(st.iap.vip) >= +p.slice(3);
+  return false;
+}
+
+// ------------------------------------------------------------- récompenses génériques
+// rewards : { gold: heures d'or passif, goldRaw, gems, yarn, feathers, eggs, arenaCoins, warCoins, stone, scroll, clover, milk, relicKeys,
+//             speedH, speedM, costume, look, kitten, skill, xp, relic, <id de ressource> }
+const RES_KEYS = ['gems', 'yarn', 'feathers', 'eggs', 'arenaCoins', 'warCoins', 'stone', 'scroll', 'clover', 'milk', 'relicKeys'];
 export function grant(st, rewards) {
   const given = [];
   const add = (k, v) => { if (v) given.push({ k, v }); };
   for (const k in rewards) {
     const v = rewards[k];
     if (!v) continue;
+    if (RES_BY_ID[k]) { st.mats[k] = (st.mats[k] || 0) + v; add(k, v); continue; }
+    if (RES_KEYS.includes(k)) { st.res[k] += v; add(k, v); continue; }
     switch (k) {
       case 'gold': { const g = Math.round(idleRate(st).gold * v); st.res.gold += g; add('gold', g); break; }
       case 'goldRaw': st.res.gold += v; add('gold', v); break;
-      case 'gems': case 'yarn': case 'feathers': case 'eggs': case 'food': case 'arenaCoins':
-        st.res[k] += v; add(k, v); break;
       case 'speedH': st.res.speedMin += v * 60; add('speedMin', v * 60); break;
       case 'speedM': st.res.speedMin += v; add('speedMin', v); break;
-      case 'skin':
-        if (!st.skins.owned.includes(v)) st.skins.owned.push(v);
-        else st.res.gems += 500;
-        add('skin', v); break;
-      case 'pet': addOwned(st.pets.owned, v); autoEquipPets(st); add('pet', v); break;
-      case 'skill': addOwned(st.skills.owned, v); autoEquipSkills(st); add('skill', v); break;
+      case 'costume':
+        if (!st.costumes.owned.includes(v)) st.costumes.owned.push(v); else st.res.gems += 500;
+        add('costume', v); break;
+      case 'look':
+        if (v === 'galaxie') for (const x of ['fur:galaxie', 'pattern:galaxy', 'eye:galaxie']) if (!st.unlocks.includes(x)) st.unlocks.push(x);
+        add('look', v); break;
+      case 'kitten': giveKitten(st, v); add('kitten', v); break;
+      case 'skill': if (!st.skills.owned[v]) st.skills.owned[v] = { lvl: 1, copies: 0 }; else st.skills.owned[v].copies++; autoEquipSkills(st); add('skill', v); break;
       case 'xp': gainHeroXp(st, v); add('xp', v); break;
+      case 'relic': { const it = makeRelic(st, v); addToBag(st, it); add('relic', v); break; }
       default: break;
     }
   }
   return given;
 }
 
-// ------------------------------------------------------------- Quêtes & Passe
+// ------------------------------------------------------------- quêtes & passe
 export function bumpQuest(st, id, n = 1) {
-  if (!st.daily) return;
-  if (st.daily.q[id] == null) return;
+  if (!st.daily || st.daily.q[id] == null) return;
   const q = DAILY_QUESTS.find((x) => x.id === id);
   st.daily.q[id] = Math.min(q.goal, st.daily.q[id] + n);
 }
@@ -205,10 +387,4 @@ export function addPassXp(st, xp) {
   st.pass.xp = Math.min(st.pass.xp + xp, PASS_XP_PER_TIER * 30);
 }
 export function passTier(st) { return Math.floor(st.pass.xp / PASS_XP_PER_TIER); }
-
-// ------------------------------------------------------------- Accélération du carton
-export function applySpeedup(st, minutes) {
-  if (!st.box.upUntil) return false;
-  st.box.upUntil -= minutes * 60000;
-  return true;
-}
+export { STAT_GROWTH, SETS };

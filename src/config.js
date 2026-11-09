@@ -2,7 +2,7 @@
 //  MIAOU EMPIRE — Tables d'équilibrage (toutes les valeurs du jeu ici)
 // =====================================================================
 export const GAME_NAME = 'Miaou Empire';
-export const SAVE_KEY = 'miaou-empire-save-v1';
+export const SAVE_KEY = 'miaou-empire-save-v2';
 
 // ---------------------------------------------------------------- Raretés
 export const RARITIES = [
@@ -21,8 +21,8 @@ export const RARITY_SUBS = [0, 0, 1, 1, 2, 2, 3, 3, 4];
 
 // ---------------------------------------------------------------- Carton (box) : probabilités
 // poids = base * croissance^(niveau-1), rareté débloquée à partir de UNLOCK
-const BOX_BASE = [1000, 400, 120, 30, 6, 1, 0.2, 0.04, 0.008];
-const BOX_GROWTH = [0.9, 0.97, 1.03, 1.08, 1.12, 1.15, 1.17, 1.19, 1.2];
+const BOX_BASE = [1000, 400, 120, 30, 6, 1, 0.12, 0.012, 0.0006];
+const BOX_GROWTH = [0.9, 0.97, 1.03, 1.08, 1.12, 1.15, 1.17, 1.18, 1.19];
 const BOX_UNLOCK = [1, 1, 1, 1, 1, 5, 10, 16, 22];
 export const BOX_MAX_LEVEL = 30;
 export function boxWeights(level) {
@@ -55,17 +55,22 @@ export function heroBase(level) {
 }
 
 // ---------------------------------------------------------------- Équipement
+// 10 emplacements ; chaque objet a une « base » visuelle (arme, chapeau…) affichée sur le chat
 export const SLOTS = [
-  { id: 'claws', name: 'Griffes', main: { atk: 3 } },
-  { id: 'hat', name: 'Bonnet', main: { hp: 14, def: 0.6 } },
-  { id: 'armor', name: 'Pull', main: { hp: 20, def: 1.2 } },
-  { id: 'gloves', name: 'Mitaines', main: { atk: 1.4, hp: 5 } },
-  { id: 'boots', name: 'Chaussons', main: { hp: 9, def: 0.8 } },
-  { id: 'collar', name: 'Grelot', main: { atk: 1.2, hp: 6 } },
-  { id: 'cape', name: 'Cape', main: { hp: 8, def: 1 } },
-  { id: 'ring', name: 'Bague', main: { atk: 2 } },
+  { id: 'weapon', name: 'Arme', main: { atk: 3 }, bases: { claws: 'Griffes', sword: 'Épée', katana: 'Katana', axe: 'Hache', hammer: 'Marteau', staff: 'Bâton', wand: 'Baguette', bow: 'Arc', scythe: 'Faux', trident: 'Trident', fish: 'Espadon', ladle: 'Louche' } },
+  { id: 'hat', name: 'Chapeau', main: { hp: 12, def: 0.5 }, bases: { beanie: 'Bonnet', wizard: 'Chapeau de mage', crown: 'Couronne', helmet: 'Heaume', cowboy: 'Stetson', beret: 'Béret', bandana: 'Bandeau', tophat: 'Haut-de-forme', flowers: 'Couronne de fleurs', viking: 'Casque viking', chef: 'Toque', party: 'Chapeau de fête', cap: 'Casquette' } },
+  { id: 'face', name: 'Visage', main: { atk: 1, hp: 4 }, bases: { round: 'Lunettes rondes', sun: 'Lunettes de soleil', monocle: 'Monocle', patch: 'Cache-œil', ninja: 'Masque ninja', star: 'Lunettes étoiles', visor: 'Visière', stache: 'Moustache' } },
+  { id: 'armor', name: 'Armure', main: { hp: 18, def: 1.2 }, bases: { tunic: 'Tunique', plate: 'Plastron', robe: 'Robe de mage', hoodie: 'Sweat', kimono: 'Kimono', royal: 'Armure royale' } },
+  { id: 'cape', name: 'Cape', main: { hp: 8, def: 0.8 }, bases: { paw: 'Cape', star: 'Cape étoilée', moon: 'Cape lunaire', skull: 'Cape pirate', heart: 'Cape du cœur' } },
+  { id: 'wings', name: 'Dos', main: { atk: 1.2, hp: 6 }, bases: { angel: 'Ailes d\'ange', bat: 'Ailes de chauve-souris', butterfly: 'Ailes de papillon', dragon: 'Ailes de dragon', fairy: 'Ailes de fée', jetpack: 'Jetpack', fishpack: 'Sac poisson' } },
+  { id: 'gloves', name: 'Gants', main: { atk: 1.4, hp: 3 }, bases: { mitts: 'Mitaines', gauntlet: 'Gantelets', boxing: 'Gants de boxe' } },
+  { id: 'boots', name: 'Bottes', main: { hp: 8, def: 0.7 }, bases: { boots: 'Bottes', sneakers: 'Baskets', slippers: 'Chaussons' } },
+  { id: 'collar', name: 'Collier', main: { atk: 1, hp: 5 }, bases: { bell: 'Grelot', pearls: 'Collier de perles', spikes: 'Collier clouté' } },
+  { id: 'ring', name: 'Anneau', main: { atk: 1.6 }, bases: { ring: 'Anneau', gem: 'Bague' } },
 ];
-export const GEAR_BASE = 4.2;
+export const SLOT_BY_ID = Object.fromEntries(SLOTS.map((s) => [s.id, s]));
+export const GEAR_BASE = 3.5;
+export const TIER_SUFFIX = ['du Chaton', 'du Vagabond', 'du Chasseur', 'du Gardien', 'du Héros', 'du Roi Félin', 'de Bastet', 'des Étoiles', 'des Origines'];
 
 export const SUBSTATS = {
   crit: { name: 'Critique', base: 1.2, cap: 80 },
@@ -78,6 +83,7 @@ export const SUBSTATS = {
   atkSpd: { name: 'Vitesse d\'attaque', base: 2, cap: 200 },
   skillDmg: { name: 'Dégâts compétences', base: 4, cap: 2000 },
   bossDmg: { name: 'Dégâts aux boss', base: 4, cap: 2000 },
+  luck: { name: 'Chance de butin', base: 5, cap: 5000 },
 };
 export const SUBSTAT_KEYS = Object.keys(SUBSTATS);
 
@@ -137,13 +143,8 @@ export const BIOMES = [
 ];
 export function biomeForChapter(ch) { return BIOMES[(ch - 1) % BIOMES.length]; }
 
-export const ENEMY_KINDS = ['rat', 'dog', 'vacuum', 'cucumber'];
-export const BOSS_NAMES = {
-  rat: 'Roi des Rats',
-  dog: 'Cerbère le Bouledogue',
-  vacuum: 'Aspirateur Suprême',
-  cucumber: 'Concombre Titanesque',
-};
+export const ENEMY_KINDS = ['rat', 'dog', 'vacuum', 'cucumber', 'pigeon', 'crab', 'wasp', 'mole', 'yeti', 'robodog', 'slime', 'ufo', 'ghost', 'knightrat'];
+export const BOSS_NAMES = { rat: 'Roi des Rats', dog: 'Cerbère le Bouledogue', vacuum: 'Aspirateur Suprême', cucumber: 'Concombre Titanesque', crab: 'Crabe Titan', yeti: 'Yéti Suprême', slime: 'Roi Magma', ufo: 'Empereur Martien' };
 
 // ---------------------------------------------------------------- Compétences (Plumes)
 export const SKILL_RARITY_ODDS = [0, 0, 70, 22.5, 6, 1.3, 0.2]; // index = rareté (Rare..Divin)
@@ -165,35 +166,7 @@ export const SKILLS = [
 ];
 export const SKILL_PASSIVE_ATK = { 2: 1, 3: 2.5, 4: 5, 5: 9, 6: 16 }; // % ATQ possédé
 
-// ---------------------------------------------------------------- Compagnons (Œufs)
-export const PET_RARITY_ODDS = [0, 0, 68, 24, 6.4, 1.4, 0.2];
-export const PET_PITY_LEG = 40;
-export const PETS = [
-  { id: 'sparrow', name: 'Moineau Malin', r: 2, mult: 0.35, color: '#c98d4f' },
-  { id: 'goldfish', name: 'Poisson Rouge', r: 2, mult: 0.4, color: '#ff7a2f' },
-  { id: 'yarnling', name: 'Pelote Vivante', r: 3, mult: 0.6, color: '#ff5ca8' },
-  { id: 'butterfly', name: 'Papillon Lunaire', r: 3, mult: 0.65, color: '#7fd8ff' },
-  { id: 'owl', name: 'Hibou Sage', r: 4, mult: 1.0, color: '#b48cff' },
-  { id: 'dragon', name: 'Dragonnet', r: 5, mult: 1.6, color: '#ff4d4d' },
-  { id: 'phoenix', name: 'Phénix Doré', r: 6, mult: 2.6, color: '#ffc93c' },
-];
-export const PET_EQUIP_ATK = { 2: 6, 3: 12, 4: 24, 5: 45, 6: 80 }; // % ATQ si équipé
-export const PET_OWN_HP = { 2: 1, 3: 2.5, 4: 5, 5: 9, 6: 16 }; // % PV possédé
 export function dupNeed(lvl) { return lvl + 1; }
-
-// ---------------------------------------------------------------- Costumes
-export const SKINS = [
-  { id: 'tabby', name: 'Tigré Roux', r: 2, atk: 0, hp: 0, src: 'Par défaut' },
-  { id: 'siamese', name: 'Siamois Élégant', r: 3, atk: 0, hp: 6, src: 'Connexion jour 7' },
-  { id: 'tux', name: 'Smoking', r: 3, atk: 6, hp: 0, src: 'Boutique d\'arène' },
-  { id: 'snow', name: 'Flocon des Neiges', r: 3, atk: 4, hp: 8, src: 'Arbre à Chat étage 30' },
-  { id: 'pirate', name: 'Capitaine Moustache', r: 4, atk: 12, hp: 12, src: 'Passe Royal premium' },
-  { id: 'ninja', name: 'Ninja de l\'Ombre', r: 4, atk: 15, hp: 8, dodge: 3, src: 'Pack Ninja' },
-  { id: 'pharaoh', name: 'Pharaon Doré', r: 5, atk: 22, hp: 22, src: 'VIP 8' },
-  { id: 'cyber', name: 'Cyber Sphynx', r: 5, atk: 30, hp: 25, crit: 5, src: 'Pack Cyber' },
-  { id: 'lion', name: 'Crinière Royale', r: 6, atk: 40, hp: 40, src: 'VIP 12' },
-  { id: 'galaxy', name: 'Empereur Cosmique', r: 8, atk: 75, hp: 60, critDmg: 50, src: 'Pack Méga Baleine' },
-];
 
 // ---------------------------------------------------------------- VIP
 // points VIP = centimes dépensés
@@ -207,7 +180,9 @@ export const VIP_PERKS = VIP_THRESHOLDS.map((_, v) => ({
   speed: v >= 8 ? 3 : v >= 2 ? 2 : 1,
   batch: v >= 10 ? 50 : v >= 5 ? 25 : v >= 1 ? 10 : 5,
   skillSlots: v >= 6 ? 4 : 3,
-  petSlots: v >= 4 ? 3 : 2,
+  kittenSlots: v >= 9 ? 5 : v >= 4 ? 4 : 3,
+  bag: 40 + v * 10,
+  luck: v * 5, // % chance de butin
   dailyGems: v * 20,
 }));
 export const VIP_TEXT = [
@@ -215,12 +190,12 @@ export const VIP_TEXT = [
   'Ouverture x10, vitesse auto du carton, +3% ATQ/PV',
   'Vitesse de combat x2',
   '+8% ATQ/PV, +18% revenus passifs',
-  '3e emplacement de compagnon',
+  '4e chaton équipé',
   'Ouverture x25',
   '4e emplacement de compétence',
   '+24% ATQ/PV',
   'Vitesse x3 + costume Pharaon Doré',
-  '+36% ATQ/PV',
+  '5e chaton équipé, +36% ATQ/PV',
   'Ouverture x50',
   '+52% ATQ/PV',
   'Costume Crinière Royale',
@@ -244,14 +219,17 @@ export const PRODUCTS = {
   gems_5: { kind: 'gems', name: 'Trésor de gemmes', price: 4999, gems: 3480 },
   gems_6: { kind: 'gems', name: 'Montagne de gemmes', price: 9999, gems: 7280 },
 
-  starter: { kind: 'once', name: 'Pack Débutant', price: 99, tag: '+900% de valeur', rewards: { yarn: 1500, gems: 300, feathers: 10, pet: 'owl' } },
-  ninja: { kind: 'once', name: 'Pack Ninja', price: 999, tag: 'Costume exclusif', rewards: { skin: 'ninja', yarn: 4000, feathers: 25, eggs: 10 } },
-  cyber: { kind: 'once', name: 'Pack Cyber Sphynx', price: 4999, tag: 'Costume + 25 000 pelotes', rewards: { skin: 'cyber', yarn: 25000, feathers: 120, eggs: 40, speedH: 24 } },
-  whale: { kind: 'once', name: 'Pack Méga Baleine', price: 9999, tag: 'LE PLUS PUISSANT', rewards: { skin: 'galaxy', yarn: 60000, feathers: 350, eggs: 120, speedH: 72, gems: 3000, skill: 'nova' } },
-
+  starter: { kind: 'once', name: 'Pack Débutant', price: 99, tag: '+900% de valeur', rewards: { yarn: 1500, gems: 300, feathers: 10, kitten: 'sphinxou' } },
+  ninja: { kind: 'once', name: 'Pack Ninja', price: 999, tag: 'Costume exclusif', rewards: { costume: 'ninja', yarn: 4000, feathers: 25, eggs: 10 } },
+  cyber: { kind: 'once', name: 'Pack Cyber Sphynx', price: 4999, tag: 'Costume + 25 000 pelotes', rewards: { costume: 'cyber', yarn: 25000, feathers: 120, eggs: 40, speedH: 24, stone: 5 } },
+  whale: { kind: 'once', name: 'Pack Méga Baleine', price: 9999, tag: 'LE PLUS PUISSANT', rewards: { costume: 'galaxy', look: 'galaxie', yarn: 60000, feathers: 350, eggs: 120, speedH: 72, gems: 3000, skill: 'nova', kitten: 'astro', stone: 10 } },
+  kittens: { kind: 'once', name: 'Panier Royal', price: 1999, tag: 'Chaton Mythique garanti', rewards: { kitten: 'licorne', eggs: 60, milk: 10 } },
+  forge: { kind: 'weekly', name: 'Kit du Forgeron', price: 999, tag: 'Forgemagie', rewards: { stone: 6, scroll: 6, rune: 400 } },
+  luck: { kind: 'weekly', name: 'Trèfles porte-bonheur', price: 499, tag: 'Butin x2', rewards: { clover: 6, moonShard: 1 } },
+  relic_pack: { kind: 'weekly', name: 'Coffre du Collectionneur', price: 4999, tag: '20 tirages de reliques', rewards: { relicKeys: 20, gems: 500 } },
   daily_1: { kind: 'daily', name: 'Offre du jour I', price: 99, rewards: { yarn: 800, gems: 40 } },
   daily_2: { kind: 'daily', name: 'Offre du jour II', price: 299, rewards: { yarn: 2200, feathers: 10 } },
-  daily_3: { kind: 'daily', name: 'Offre du jour III', price: 499, rewards: { yarn: 4000, eggs: 6, gems: 120 } },
+  daily_3: { kind: 'daily', name: 'Offre du jour III', price: 499, rewards: { yarn: 4000, eggs: 6, gems: 120, clover: 1 } },
 
   weekly_1: { kind: 'weekly', name: 'Coffret hebdo', price: 999, rewards: { yarn: 9000, feathers: 30, eggs: 15, gems: 300 } },
   weekly_2: { kind: 'weekly', name: 'Coffret hebdo royal', price: 2999, rewards: { yarn: 30000, feathers: 90, eggs: 45, speedH: 24, gems: 900 } },
@@ -266,7 +244,7 @@ export const PRODUCTS = {
   pass_deluxe: { kind: 'pass', name: 'Passe Royal Deluxe', price: 1999 },
 };
 
-export const FIRST_RECHARGE = { yarn: 3000, gems: 500, skill: 'laser', pet: 'dragon', feathers: 20 };
+export const FIRST_RECHARGE = { yarn: 3000, gems: 500, skill: 'laser', kitten: 'drakou', feathers: 20, stone: 2 };
 
 export const FUND_TIERS = [5, 10, 20, 30, 40, 50, 70, 90, 110, 130, 160, 200].map((st, i) => ({ stage: st, gems: [300, 400, 500, 600, 700, 800, 1000, 1100, 1300, 1500, 1700, 2100][i] }));
 
@@ -275,7 +253,7 @@ export const PASS_XP_PER_TIER = 100;
 export const PASS_TIERS = Array.from({ length: 30 }, (_, i) => {
   const t = i + 1;
   const free = t % 5 === 0 ? { gems: 60 } : t % 2 ? { yarn: 300 + t * 20 } : { gold: 1 };
-  const prem = t === 30 ? { skin: 'pirate' } : t % 10 === 0 ? { eggs: 10, gems: 300 } : t % 5 === 0 ? { feathers: 15 } : t % 2 ? { yarn: 1200 + t * 60 } : { gems: 80 };
+  const prem = t === 30 ? { costume: 'pirate' } : t % 10 === 0 ? { eggs: 10, gems: 300 } : t % 5 === 0 ? { feathers: 15 } : t % 2 ? { yarn: 1200 + t * 60 } : { gems: 80 };
   return { t, free, prem };
 });
 
@@ -289,6 +267,9 @@ export const DAILY_QUESTS = [
   { id: 'summon', name: 'Invoquer 10 compétences', goal: 10, pts: 10 },
   { id: 'train', name: 'Entraîner 5 fois', goal: 5, pts: 10 },
   { id: 'ad', name: 'Regarder 2 vidéos bonus', goal: 2, pts: 5 },
+  { id: 'craft', name: 'Fabriquer ou forger 1 objet', goal: 1, pts: 10 },
+  { id: 'market', name: 'Vendre au marché', goal: 1, pts: 5 },
+  { id: 'war', name: 'Attaquer en Guerre des Gouttières', goal: 2, pts: 10 },
 ];
 export const DAILY_CHESTS = [
   { pts: 20, rewards: { yarn: 200 } },
@@ -298,7 +279,7 @@ export const DAILY_CHESTS = [
   { pts: 100, rewards: { yarn: 600, gems: 50, feathers: 5 } },
 ];
 export const LOGIN_CALENDAR = [
-  { yarn: 500 }, { gems: 100 }, { feathers: 10 }, { yarn: 1000 }, { eggs: 5 }, { gems: 200 }, { skin: 'siamese', feathers: 20 },
+  { yarn: 500 }, { gems: 100 }, { feathers: 10 }, { yarn: 1000 }, { eggs: 5 }, { gems: 200 }, { costume: 'siamese', feathers: 20 },
 ];
 
 // Objectifs (succès) — grosse source de gemmes gratuites
@@ -329,18 +310,26 @@ export function towerReward(floor) {
   const r = { gems: 25 + Math.floor(floor / 5) * 5 };
   if (floor % 5 === 0) r.feathers = 5;
   if (floor % 10 === 0) { r.eggs = 3; r.gems += 150; }
-  if (floor === 30) r.skin = 'snow';
+  if (floor === 30) r.costume = 'snow';
+  if (floor % 25 === 0) r.moonShard = 1;
   return r;
 }
 
 // ---------------------------------------------------------------- Arène
 export const ARENA_FREE_TICKETS = 5;
 export const ARENA_SHOP = [
-  { id: 'a_skin', name: 'Costume Smoking', cost: 3000, rewards: { skin: 'tux' }, limit: 1 },
+  { id: 'a_skin', name: 'Costume Gentleman', cost: 3000, rewards: { costume: 'tux' }, limit: 1 },
   { id: 'a_feathers', name: '10 Plumes', cost: 600, rewards: { feathers: 10 }, limit: 5 },
-  { id: 'a_eggs', name: '5 Œufs', cost: 500, rewards: { eggs: 5 }, limit: 5 },
+  { id: 'a_eggs', name: '5 Paniers', cost: 500, rewards: { eggs: 5 }, limit: 5 },
+  { id: 'a_stone', name: 'Pierre de protection', cost: 800, rewards: { stone: 1 }, limit: 3 },
   { id: 'a_yarn', name: '1 000 Pelotes', cost: 300, rewards: { yarn: 1000 }, limit: 10 },
 ];
+export const ARENA_SIZE = 100;
+export const DIVISIONS = [
+  { name: 'Légende', max: 3, color: '#ff7ae0' }, { name: 'Maître', max: 10, color: '#ff4d5e' }, { name: 'Diamant', max: 20, color: '#48f3ff' },
+  { name: 'Platine', max: 35, color: '#b9c1cc' }, { name: 'Or', max: 50, color: '#ffcc33' }, { name: 'Argent', max: 70, color: '#cdd3dc' }, { name: 'Bronze', max: 101, color: '#d6a062' },
+];
+export function divisionOf(rank) { return DIVISIONS.find((d) => rank <= d.max) || DIVISIONS[DIVISIONS.length - 1]; }
 export function arenaDailyGems(rank) {
   if (rank === 1) return 600;
   if (rank <= 3) return 450;
@@ -351,4 +340,4 @@ export function arenaDailyGems(rank) {
 
 // ---------------------------------------------------------------- Vidéos bonus (pubs simulées)
 export const AD_LIMIT = 8;
-export const AD_REWARDS = [{ yarn: 150 }, { gems: 15 }, { speedM: 15 }, { feathers: 1 }];
+export const AD_REWARDS = [{ yarn: 150 }, { gems: 15 }, { speedM: 15 }, { feathers: 1 }, { rune: 10 }, { eggs: 1 }];

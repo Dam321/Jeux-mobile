@@ -10,9 +10,6 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "dependencies": {
-    "three": "0.160.0"
-  },
   "devDependencies": {
     "esbuild": "^0.24.0"
   },
