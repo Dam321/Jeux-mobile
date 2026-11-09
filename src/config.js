@@ -230,6 +230,7 @@ export const PRODUCTS = {
   daily_3: { kind: 'daily', name: 'Offre du jour III', price: 499, rewards: { yarn: 4000, eggs: 6, gems: 120, clover: 1 } },
 
   weekly_1: { kind: 'weekly', name: 'Coffret hebdo', price: 999, rewards: { yarn: 9000, feathers: 30, eggs: 15, gems: 300 } },
+  festival: { kind: 'weekly', name: 'Pack du Festival', price: 999, rewards: { fest: 300, gems: 300, eggs: 5 }, desc: '+300 points et lanternes du Festival de la semaine' },
   weekly_2: { kind: 'weekly', name: 'Coffret hebdo royal', price: 2999, rewards: { yarn: 30000, feathers: 90, eggs: 45, speedH: 24, gems: 900 } },
 
   power: { kind: 'flash', name: 'Pack Puissance', price: 299, tag: 'Offre flash', rewards: { yarn: 3000, gems: 200, feathers: 10, gold: 4 } },
@@ -305,16 +306,8 @@ export function dungeonReward(id, lvl, bestStage) {
 }
 export function dungeonStage(lvl) { return 4 + lvl * 6; }
 
-// ---------------------------------------------------------------- Arbre à Chat (tour)
+// ---------------------------------------------------------------- Tour des Défis (récompenses : content3.js)
 export function towerStage(floor) { return 6 + Math.round(floor * 3.5); }
-export function towerReward(floor) {
-  const r = { gems: 25 + Math.floor(floor / 5) * 5 };
-  if (floor % 5 === 0) r.feathers = 5;
-  if (floor % 10 === 0) { r.eggs = 3; r.gems += 150; }
-  if (floor === 30) r.costume = 'snow';
-  if (floor % 25 === 0) r.moonShard = 1;
-  return r;
-}
 
 // ---------------------------------------------------------------- Arène
 export const ARENA_FREE_TICKETS = 5;

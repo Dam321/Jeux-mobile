@@ -84,6 +84,9 @@ export function sfx(name) {
     case 'defeat': [392, 330, 262, 196].forEach((f, i) => tone(f, 0.3, 'triangle', 0.2, 1, i * 0.15)); break;
     case 'buy': [784, 1047, 1319, 1568, 2093].forEach((f, i) => tone(f, 0.18, 'square', 0.08, 1, i * 0.05)); noise(0.4, 0.1, 9000, 1, 'highpass', 0.1); break;
     case 'error': tone(200, 0.15, 'square', 0.12, 0.8); break;
+    // montée de suspense (carton qui va donner une grande rareté)
+    case 'charge': [0, 1, 2, 3, 4, 5, 6, 7].forEach((i) => tone(220 * Math.pow(1.12, i), 0.12, 'square', 0.06 + i * 0.01, 1, i * 0.09)); noise(0.8, 0.12, 3000, 1, 'bandpass', 0, 4); break;
+    case 'pop': tone(660, 0.08, 'triangle', 0.18, 1.6); noise(0.12, 0.12, 2500, 1, 'bandpass'); break;
     default: break;
   }
 }

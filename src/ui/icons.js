@@ -99,6 +99,11 @@ export function injectIconDefs() {
   document.body.appendChild(d);
 }
 
+// v4 : guildes, festival, bestiaire
+ICONS.guildCoins = S(`<path d="M16 3l11 4v8c0 7-5 12-11 14C10 27 5 22 5 15V7z" fill="#4aa9ff" stroke="#0a2f7a" stroke-width="2" stroke-linejoin="round"/><path d="M16 6l8 3v6c0 5-3.6 8.6-8 10z" fill="#9fd4ff" opacity=".55"/><ellipse cx="16" cy="18" rx="3.6" ry="3" fill="#fff"/><circle cx="11.6" cy="13.4" r="1.7" fill="#fff"/><circle cx="14.6" cy="11.4" r="1.7" fill="#fff"/><circle cx="17.6" cy="11.4" r="1.7" fill="#fff"/><circle cx="20.4" cy="13.4" r="1.7" fill="#fff"/>`);
+ICONS.guild = S(`<path d="M7 4h18v4H7z" fill="#ff4d5e" stroke="#5a0010" stroke-width="2"/><path d="M8 8h16v10l-8 9-8-9z" fill="#ffcc33" stroke="#8a4b00" stroke-width="2" stroke-linejoin="round"/><path d="M16 11l2 4 4 .5-3 3 .8 4-3.8-2-3.8 2 .8-4-3-3 4-.5z" fill="#ff7a1a" stroke="#8a2a00" stroke-width="1.2" stroke-linejoin="round"/>`);
+ICONS.fest = S(`<path d="M16 2v4" stroke="#8a4b00" stroke-width="2"/><path d="M9 8h14l-1 3H10z" fill="#ffcc33" stroke="#8a4b00" stroke-width="1.6"/><path d="M8 11h16c1 9-2 14-8 15-6-1-9-6-8-15z" fill="#ff4d5e" stroke="#6a0a1a" stroke-width="2"/><path d="M12 13c0 6 1 9 4 11M20 13c0 6-1 9-4 11" fill="none" stroke="#ffb3b9" stroke-width="1.4"/><circle cx="16" cy="18" r="3" fill="#fff27a"/><path d="M13 26h6v3h-6z" fill="#ffcc33" stroke="#8a4b00" stroke-width="1.4"/>`);
+ICONS.bestiary = S(`<path d="M5 5h10c1 0 1 1 1 1v21s0-1-1-1H5z" fill="#c98a4b" stroke="#4a2200" stroke-width="2" stroke-linejoin="round"/><path d="M27 5H17c-1 0-1 1-1 1v21s0-1 1-1h10z" fill="#e0a868" stroke="#4a2200" stroke-width="2" stroke-linejoin="round"/><circle cx="10.5" cy="14" r="3" fill="#4a2200"/><path d="M19 11h6M19 15h6M19 19h5" stroke="#4a2200" stroke-width="1.6"/>`);
 ICONS.towerTokens = ICONS.tower;
 ICONS.frags = ICONS.rel;
 export function icon(name, cls = '') {

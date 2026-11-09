@@ -9,6 +9,7 @@ import { KittenRig } from './gfx/kittens.js';
 import { buildScenery, drawScenery, drawSceneryFront } from './gfx/scenery.js';
 import { FX } from './gfx/fx.js';
 import { GROUND_Y, drawSprite, ell, rgba, glow, OUT } from './gfx/draw.js';
+import { classFinisher, classAura, drawClassSigil, drawMarks, poisonFx, parryFx, shieldFx, executeFx, soulTo } from './gfx/classfx.js';
 import { castSkill, kittenAttack, heroBasicAttack, heroFinisher, meleeImpactFx, enemyAttack, hurtFx, bossSkill, auraTick } from './gfx/skills.js';
 import { hitDamage, attackInterval } from './combat.js';
 import { ENEMY_RANGED, ELEMENTS } from './content.js';
@@ -65,7 +66,9 @@ export class Battle {
       stats: def.stats, hp: def.stats.hp, maxHp: def.stats.hp, shield: 0, atkT: 0.3, anim: 'idle', animK: 0, flash: 0,
       dead: false, deadT: 0, stun: 0, buff: 0, buffT: 0, name: def.name || 'Minou', style: rig.style, weaponColor: def.weaponColor || '#ffffff',
       skills: def.skills || [], cds: (def.skills || []).map((s) => s.cd * 0.35), perks: def.perks || {}, revived: false, dash: 0, height: (rig.height || 128) * HERO_SCALE,
+      mech: def.mech || null, souls: 0, shT: def.mech && def.mech.shieldEvery ? def.mech.shieldEvery - 1 : 0, vanish: 0,
     };
+    if (u.mech && !(def.gear && def.gear.weapon)) u.style = u.mech.style;
     u.kittens = (def.kittens || []).map((k, i) => this.makeKitten(k, u, i));
     return u;
   }
@@ -106,6 +109,8 @@ export class Battle {
     const ratio = h.maxHp ? h.hp / h.maxHp : 1;
     h.stats = def.stats; h.maxHp = def.stats.hp; h.hp = Math.max(1, Math.min(h.maxHp, ratio * h.maxHp));
     h.perks = def.perks || {};
+    h.mech = def.mech || null;
+    if (h.mech && !(def.gear && def.gear.weapon)) h.style = h.mech.style;
     const old = Object.fromEntries(h.skills.map((s, i) => [s.id, h.cds[i]]));
     h.skills = def.skills; h.cds = def.skills.map((s) => old[s.id] ?? s.cd * 0.4);
     const ids = def.kittens.map((k) => k.id).join();
@@ -152,14 +157,49 @@ export class Battle {
     for (let i = 0; i < n; i++) {
       const d = { kind: kinds[i % kinds.length], hp: boss.maxHp / 14, atk: boss.stats.atk / 3, def: boss.stats.def / 2, interval: 1.5, name: null };
       const e = this.makeEnemy(d, 1 + i, 3);
-      e.x = boss.x + 30 + i * 20; e.tx = boss.x - 40 - i * 24; e.y = GROUND_Y + (i ? -8 : 8);
+      // les sbires sortent du boss et se placent devant lui, sans dépasser la ligne de front
+      const [L] = this.extent(e);
+      e.x = boss.x + 30 + i * 20; e.tx = Math.max(this.heroFront() + 48 + L * 0.85 + i * 20, boss.x - 46 - i * 24); e.y = GROUND_Y + (i ? -8 : 8);
       this.units.push(e);
       this.fx.burst(e.x, e.y - 20, { count: 16, color: ['#b968ff', '#ffffff'], speed: 120, size: 8, life: 0.5, shape: 'smoke' });
     }
   }
+  // Largeur réelle d'un ennemi autour de son ancre : [gauche, droite] en unités
+  extent(e) {
+    const spr = monsterSprite(e.ekind, 0, e.variant);
+    if (!spr) return [30 * e.scale, 30 * e.scale];
+    return [Math.max(12, -spr.x0) * e.scale, Math.max(12, spr.x0 + spr.w) * e.scale];
+  }
+  // Bord avant du héros (arme comprise) : les ennemis ne le franchissent jamais
+  heroFront() { return this.heroX() + 42; }
+  // Formation : un espace libre devant le héros (on y voit les sorts), puis les ennemis côte à côte
+  layoutWave(list) {
+    if (!list.length) return;
+    const GAP = 48;
+    const ext = list.map((e) => this.extent(e));
+    const xs = [];
+    let x = this.heroFront() + GAP;
+    list.forEach((e, i) => {
+      const [L] = ext[i];
+      x += i === 0 ? L * 0.85 : ext[i - 1][1] * 0.5 + L * 0.5 + 4;
+      xs.push(x);
+    });
+    // trop large pour l'écran : on resserre l'arrière de la formation, jamais le premier rang
+    const n = list.length - 1, maxR = this.viewW - 6;
+    const right = xs[n] + ext[n][1] * 0.7;
+    if (n > 0 && right > maxR) {
+      const k = Math.max(0.3, (maxR - ext[n][1] * 0.7 - xs[0]) / (xs[n] - xs[0]));
+      for (let i = 1; i <= n; i++) xs[i] = xs[0] + (xs[i] - xs[0]) * k;
+    }
+    list.forEach((e, i) => { e.tx = xs[i]; e.x = Math.max(e.x, xs[i] + 24); });
+  }
   spawnWave() {
     const defs = this.enc.waves[this.wave];
-    defs.forEach((d, i) => this.units.push(this.makeEnemy(d, i, defs.length)));
+    // les tireurs restent derrière les combattants au corps à corps
+    const made = defs.map((d, i) => this.makeEnemy(d, i, defs.length));
+    const order = made.slice().sort((a, b) => (a.ranged ? 1 : 0) - (b.ranged ? 1 : 0));
+    this.layoutWave(order);
+    this.units.push(...made);
     const boss = defs.find((d) => d.boss);
     this.game.onBoss && this.game.onBoss(boss ? { name: boss.name || 'Boss' } : null);
     if (boss) { sfx('thunder'); this.flash('#ff2a3d', 0.25); this.shake(0.6); this.game.onBossIntro && this.game.onBossIntro(boss, this.enc.variant || 0); }
@@ -197,9 +237,24 @@ export class Battle {
     const S = att.stats;
     const T = tgt.stats;
     if (tgt.kind === 'hero' && o.basic && Math.random() * 100 < (T.dodge || 0)) { this.say(tgt, 'ESQUIVE', 'miss'); return null; }
+    // Fine Lame Royale : parade + riposte
+    const TM = tgt.mech;
+    if (TM && TM.parry && o.basic && att.kind === 'enemy' && !tgt.dead && Math.random() * 100 < TM.parry) {
+      this.say(tgt, 'PARADE', 'tag'); parryFx(this, tgt);
+      this.later(0.1, () => { if (!att.dead && !tgt.dead) { this.hit(tgt, att, 1, {}); meleeImpactFx(this, tgt, att, false); } });
+      return null;
+    }
+    const AM = att.kind === 'hero' ? att.mech : null;
     let dmg = hitDamage(S.atk * (1 + (att.buff || 0)), T.def || 0) * mult;
     let crit = false;
-    if (!o.noCrit && Math.random() * 100 < (S.crit || 0)) { crit = true; dmg *= 1 + (S.critDmg || 50) / 100; }
+    const forceCrit = AM && AM.firstCrit && o.basic && tgt.kind === 'enemy' && !tgt.hitOnce;
+    if (forceCrit) tgt.hitOnce = true;
+    if (!o.noCrit && (forceCrit || Math.random() * 100 < (S.crit || 0))) { crit = true; dmg *= 1 + (S.critDmg || 50) / 100; }
+    if (AM) {
+      if (AM.rage) dmg *= 1 + (AM.rage / 100) * (1 - att.hp / att.maxHp);
+      if (AM.soulAtk && att.souls) dmg *= 1 + (att.souls * AM.soulAtk) / 100;
+    }
+    if (tgt.curse && att.side === 0) dmg *= 1 + (tgt.curse * tgt.curseP) / 100;
     if (o.skill && !o.pet) dmg *= 1 + (S.skillDmg || 0) / 100;
     if ((tgt.boss || tgt.kind === 'hero') && att.kind === 'hero') dmg *= 1 + (S.bossDmg || 0) / 100;
     dmg *= 0.92 + Math.random() * 0.16;
@@ -214,6 +269,11 @@ export class Battle {
     if (o.basic && att.kind === 'hero' && S.lifesteal > 0) this.heal(att, (dmg * S.lifesteal) / 100 / att.maxHp, true);
     if (o.basic && att.kind === 'hero' && Math.random() * 100 < (S.stun || 0) && !tgt.boss) { tgt.stun = 1.2; this.say(tgt, 'ÉTOURDI', 'tag'); }
     if (tgt.side === 0) hurtFx(this, tgt);
+    if (AM && o.basic && tgt.kind === 'enemy' && !tgt.dead) {
+      if (AM.curse) { tgt.curse = Math.min(AM.curseMax, (tgt.curse || 0) + 1); tgt.curseP = AM.curse; }
+      if (AM.poison) { tgt.poison = Math.min(AM.poisonMax, (tgt.poison || 0) + 1); tgt.poisonT = AM.poisonDur; tgt.poisonDps = hitDamage(S.atk, T.def || 0) * AM.poison; tgt.poisonSrc = att; }
+      if (AM.execute && !tgt.boss && tgt.hp > 0 && tgt.hp < tgt.maxHp * AM.execute) { executeFx(this, tgt); this.say(tgt, 'EXÉCUTION', 'tag'); tgt.hp = 0; }
+    }
     if (tgt.kind === 'hero' && o.basic && !tgt.dead && Math.random() * 100 < (T.counter || 0)) {
       this.later(0.12, () => { if (!att.dead && !tgt.dead) { this.say(tgt, 'RIPOSTE', 'tag'); this.hit(tgt, att, 1, {}); meleeImpactFx(this, tgt, att, false); } });
     }
@@ -237,6 +297,9 @@ export class Battle {
       this.fx.burst(x, u.y - 10, { count: 6, color: '#d8d0ff', speed: 40, size: 18, endSize: 34, life: 0.8, shape: 'smoke' });
       if (u.boss) { this.shake(1.2); this.flash('#ffffff', 0.5); this.fx.ring(x, u.y, { r1: 160, color: '#ffd23f' }); this.stop(0.12); this.zoom(1.08, x, y); }
       this.game.onKill && this.game.onKill(u, this.stage.toCss(x, y));
+      // Seigneur des Âmes : chaque ennemi vaincu nourrit le héros
+      const H = this.hero, HM = H && H.mech;
+      if (HM && HM.soulHeal && !H.dead) { soulTo(this, x, y, H, HM.color); this.later(0.6, () => { if (H.dead) return; H.souls = Math.min(HM.soulMax, (H.souls || 0) + 1); this.heal(H, HM.soulHeal, true); }); }
       sfx('coin');
     } else if (u.kind === 'hero') {
       this.fx.burst(x, y, { count: 40, color: ['#ffffff', '#ffd6f5'], speed: 200, size: 9, life: 0.8, shape: 'star' });
@@ -250,6 +313,12 @@ export class Battle {
   heroAct(u, dt) {
     if (u.dead) return;
     if (u.aura) auraTick(this, u, dt);
+    const M = u.mech;
+    if (M) {
+      classAura(this, u, dt);
+      if (u.vanish > 0) u.vanish -= dt;
+      if (M.shieldEvery) { u.shT += dt; if (u.shT >= M.shieldEvery) { u.shT = 0; this.shield(u, M.shieldPct); shieldFx(this, u, M.color); this.say(u, 'REMPART', 'tag'); } }
+    }
     if (u.buffT > 0) { u.buffT -= dt; if (u.buffT <= 0) u.buff = 0; if (Math.random() < 0.25) { const [x, y] = this.center(u); this.fx.emit(x + (Math.random() - 0.5) * 40, y + (Math.random() - 0.5) * 50, 0, -40, '#ffd23f', 7, 0.6, { shape: 'star' }); } }
     if (u.stun > 0) { u.stun -= dt; return; }
     const foes = this.foes(u);
@@ -267,16 +336,20 @@ export class Battle {
         if (!target || target.dead) { target = this.foes(u)[0]; if (!target) return; }
         const r = this.hit(u, target, 1, { basic: true });
         if (melee || u.style === 'pierce') meleeImpactFx(this, u, target, r && r.crit);
+        // Maître de la Volée : un second ennemi est touché
+        if (M && M.multishot && !second) { const o2 = this.foes(u).find((e) => e !== target); if (o2) { const [hx, hy] = this.hand(u); this.fx.projectile([hx, hy], () => this.center(o2), { dur: 0.22, arc: 10, draw: (ctx, px, py, a) => { ctx.save(); ctx.translate(px, py); ctx.rotate(a); ctx.strokeStyle = M.accent; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(-10, 0); ctx.lineTo(8, 0); ctx.stroke(); ctx.restore(); }, onHit: () => { if (!o2.dead) this.hit(u, o2, M.multishot, { basic: true, extra: true }); } }); } }
         if (r && r.crit) sfx('crit'); else sfx('hit');
         if (!second && u.perks.double && Math.random() < 0.12) this.later(0.12, () => { this.say(u, 'DOUBLE !', 'tag'); strike(target, true); });
         if (!second && Math.random() * 100 < (S.combo || 0)) this.later(0.16, () => { this.say(u, 'COMBO', 'tag'); strike(target, true); });
       };
       u.atkCount = (u.atkCount || 0) + 1;
-      if (u.atkCount % 5 === 0) heroFinisher(this, u, tg, (target) => { const r = this.hit(u, target, 2.5, { basic: true }); if (r && r.crit) sfx('crit'); });
+      if (M && u.atkCount % M.ultEvery === 0) classFinisher(this, u, tg, M, (target, mult) => this.hit(u, target, mult, { basic: true, ult: true }));
+      else if (!M && u.atkCount % 5 === 0) heroFinisher(this, u, tg, (target) => { const r = this.hit(u, target, 2.5, { basic: true }); if (r && r.crit) sfx('crit'); });
       else heroBasicAttack(this, u, tg, () => strike(tg, false));
     }
+    const cdr = 1 + ((M && M.cdr) || 0) / 100;
     for (let i = 0; i < u.skills.length; i++) {
-      u.cds[i] -= dt;
+      u.cds[i] -= dt * cdr;
       if (u.cds[i] <= 0) {
         const sk = u.skills[i];
         if (sk.type === 'heal' && u.hp / u.maxHp > 0.75 && sk.id !== 'ninelives') continue;
@@ -308,6 +381,19 @@ export class Battle {
       k.ultT -= dt;
       if (k.ultT <= 0) { k.ultT = 12; kittenAttack(this, k, foes[0], k.mult, true); }
     }
+  }
+  poisonTick(e, dt) {
+    e.poisonT -= dt;
+    e.pTick = (e.pTick || 0) + dt;
+    if (e.pTick >= 0.5) {
+      e.pTick = 0;
+      const d = e.poisonDps * e.poison * 0.5;
+      e.hp -= d;
+      this.fx.text(e.x, e.y - e.height * 0.6, fmt(d), 'pet');
+      poisonFx(this, e);
+      if (e.hp <= 0) this.kill(e);
+    }
+    if (e.poisonT <= 0) e.poison = 0;
   }
   enemyAct(e, dt) {
     if (e.dead) return;
@@ -368,7 +454,7 @@ export class Battle {
         if (!anyArrived && !this.rival) this.scroll += dt * 40;
         this.heroAct(H, dt);
         if (this.rival) this.heroAct(this.rival, dt);
-        for (const u of this.units) if (u.kind === 'enemy') this.enemyAct(u, dt);
+        for (const u of this.units) if (u.kind === 'enemy') { this.enemyAct(u, dt); if (u.poison && !u.dead) this.poisonTick(u, dt); }
         if (!this.rival) {
           const es = this.units.filter((u) => u.kind === 'enemy');
           if (es.length && es.every((e) => e.dead && e.deadT > 0.5)) {
@@ -380,7 +466,10 @@ export class Battle {
         } else if (this.rival.dead && this.phase === 'fight') { this.setPhase('victory'); }
         if (this.enc.timeLimit) {
           this.enc.elapsed = (this.enc.elapsed || 0) + dt;
-          if (this.enc.elapsed > this.enc.timeLimit && !H.dead) { H.dead = true; H.anim = 'dead'; H.animK = 0; this.setPhase('defeat'); }
+          if (this.enc.elapsed > this.enc.timeLimit && !H.dead) {
+            if (this.enc.timedBoss) { this.setPhase('victory'); sfx('victory'); this.game.onBoss && this.game.onBoss(null); } // temps écoulé : on compte les dégâts
+            else { H.dead = true; H.anim = 'dead'; H.animK = 0; this.setPhase('defeat'); }
+          }
         }
         break;
       }
@@ -442,12 +531,13 @@ export class Battle {
         ctx.restore();
       }
     }
+    for (const u of this.units) if (u.kind === 'hero') drawClassSigil(ctx, this, u);
     const order = this.units.slice().sort((a, b) => a.y - b.y);
     for (const u of order) this.drawUnit(ctx, u);
     this.fx.drawItems(ctx, 'front');
     this.fx.drawParticles(ctx);
     if (this.sc) drawSceneryFront(ctx, this.sc, this.scroll, W);
-    for (const u of order) this.drawBar(ctx, u);
+    for (const u of order) { this.drawBar(ctx, u); if (u.kind === 'enemy' && (u.curse || u.poison)) drawMarks(ctx, this, u); }
     this.fx.drawTexts(ctx);
     if (this.phase === 'intro') this.drawVersus(ctx);
     if (this.flashA > 0.01) {
@@ -460,7 +550,10 @@ export class Battle {
     if (u.kind === 'hero' || u.kind === 'kitten') {
       const x = u.x + (u.dash || 0) * u.facing;
       const st = u.stun > 0 ? 'hurt' : u.anim;
+      const hide = u.vanish > 0;
+      if (hide) { ctx.save(); ctx.globalAlpha *= 0.18; }
       u.rig.draw(ctx, x, u.y, u.scale, u.facing, { state: st, k: u.animK, flash: u.flash, flashColor: u.flashColor });
+      if (hide) ctx.restore();
       if (u.shield > 0 && !u.dead) {
         ctx.save(); ctx.globalCompositeOperation = 'lighter';
         const [cx, cy] = this.center(u);
@@ -492,7 +585,7 @@ export class Battle {
     if (u.dead || u.kind === 'kitten' || (u.kind === 'enemy' && (!u.arrived && u.x > this.viewW - 10))) return;
     if (u.boss) return;
     const w = u.kind === 'hero' ? 44 : 30, h = u.kind === 'hero' ? 5.5 : 4.5;
-    const x = u.x + (u.dash || 0) * u.facing - w / 2, y = u.y - u.height - (u.kind === 'hero' ? 8 : 6) - (u.fly ? 4 : 0);
+    const x = u.x + (u.dash || 0) * u.facing - w / 2, y = u.y - u.height - (u.kind === 'hero' ? 8 + (u.mech ? 14 : 0) : 6) - (u.fly ? 4 : 0); // chapeaux de classe hauts
     ctx.fillStyle = '#1a0d2e'; ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x - 1.5, y - 1.5, w + 3, h + 3, 4) : ctx.rect(x - 1.5, y - 1.5, w + 3, h + 3); ctx.fill();
     const r = Math.max(0, u.hp / u.maxHp);
     const g = ctx.createLinearGradient(0, y, 0, y + h);

@@ -4,7 +4,7 @@ import { icon } from './icons.js';
 import {
   RARITIES, SUBSTATS, TRAININGS, trainingCost, SKILLS, SKILL_PASSIVE_ATK, SKILL_RARITY_ODDS, SKILL_PITY_LEG, SKILL_PITY_DIV,
   dupNeed, VIP_PERKS, VIP_THRESHOLDS, VIP_TEXT, PRODUCTS, FUND_TIERS, PASS_TIERS, PASS_XP_PER_TIER, DAILY_QUESTS, DAILY_CHESTS,
-  LOGIN_CALENDAR, ACHIEVEMENTS, DUNGEONS, dungeonReward, towerReward, ARENA_SHOP, arenaDailyGems, AD_LIMIT, AD_REWARDS,
+  LOGIN_CALENDAR, ACHIEVEMENTS, DUNGEONS, dungeonReward, towerStage, ARENA_SHOP, arenaDailyGems, AD_LIMIT, AD_REWARDS,
   FIRST_RECHARGE, DUNGEON_FREE_KEYS, SLOTS, divisionOf, DIVISIONS, LAIR_FREE, lairBuyCost,
 } from '../config.js';
 import {
@@ -20,11 +20,16 @@ import {
 } from '../content3.js';
 import { weekKey } from '../state.js';
 import { unitPrice, lotPrice, maxListings, gemSellRate, gemBuyRate, gemBuyLimit } from '../market.js';
-import { CLAN_BY_ID, defenderPower, defenderName, defenderLoadout, ownedTerritories, tributeAvailable, warBuyCost, myRank, botLoadout } from '../pvp.js';
+import { CLAN_BY_ID, defenderPower, defenderName, defenderLoadout, ownedTerritories, tributeAvailable, warBuyCost, myRank, botLoadout, towerBoard, towerRankReward, powerForStage, wbBoard, wbRankReward } from '../pvp.js';
+import { CLASS_BY_ID } from '../classes.js';
 import { FURS, PATTERNS, EYES, EYE_STYLES, EARS, TAILS, catPortraitURL } from '../gfx/cat.js';
 import { itemIconURL } from '../gfx/gear.js';
 import { monsterPortrait } from '../gfx/bestiary.js';
 import { resIcon, slotName } from './ui.js';
+import { classPanel } from './classui.js';
+import { guildPanel } from './guildui.js';
+import { eventPanel, bestiaryPanel } from './eventui.js';
+import { adaptBase } from '../classes.js';
 
 const rr = (r) => ({ '--rc': RARITIES[r].color, '--rd': RARITIES[r].dark });
 const chipsOf = (ui, g, rewards) => h('div.rewards.sm', null, g.previewRewards(rewards).map((r) => ui.rewardChip(r)));
@@ -41,8 +46,8 @@ function spark(hist) {
 // ====================================================================== HÉROS
 const hero = {
   title: 'Héros',
-  tabs: [['gear', 'Équipement'], ['look', 'Apparence'], ['style', 'Style'], ['artifacts', 'Artefacts'], ['skills', 'Pouvoirs'], ['train', 'Entraînement'], ['stats', 'Stats']],
-  tabDot: (g, id) => (id === 'train' ? g.trainAffordable() : id === 'skills' ? g.st.res.feathers >= 1 || g.anyLevelUp('skills') : false),
+  tabs: [['gear', 'Équipement'], ['class', 'Classe'], ['look', 'Apparence'], ['style', 'Style'], ['artifacts', 'Artefacts'], ['skills', 'Pouvoirs'], ['train', 'Entraînement'], ['stats', 'Stats']],
+  tabDot: (g, id) => (id === 'class' ? g.classDot() : id === 'train' ? g.trainAffordable() : id === 'skills' ? g.st.res.feathers >= 1 || g.anyLevelUp('skills') : false),
   render(ui, g, tab) {
     const st = g.st, S = g.stats;
     if (tab === 'gear') {
@@ -66,6 +71,7 @@ const hero = {
         h('div.toggle-row', null, h('button.toggle', { cls: st.box.autoBreak ? 'on' : '', onclick: () => g.setAutoBreak(!st.box.autoBreak) }, h('span', null, 'Briser les objets inutiles en runes (au lieu de l\'or)'), h('i'))),
       );
     }
+    if (tab === 'class') return classPanel(ui, g);
     if (tab === 'look') return lookPanel(ui, g);
     if (tab === 'skills') return skillsPanel(ui, g);
     if (tab === 'artifacts') return artifactsPanel(ui, g);
@@ -106,7 +112,7 @@ const hero = {
           else if (owned) btn = h('button.btn.sm.green', { onclick: () => g.setCostume(c.id) }, 'Porter');
           else btn = h('button.btn.sm.purple', { onclick: () => g.costumeSource(c.id) }, 'Obtenir');
           return h('div.skin-card', { cls: 'r' + c.r + (owned ? '' : ' locked'), style: rr(c.r) },
-            h('img', { src: g.costumeURL(c.id), alt: '' }), h('b', null, c.name), h('small.bonus', null, bon),
+            ui.costumeImg(c.id), h('b', null, c.name), h('small.bonus', null, bon),
             h('small.muted', null, owned ? 'Bonus actif (possédé)' : c.src), btn);
         })),
       );
@@ -159,12 +165,12 @@ function lookPanel(ui, g) {
       ),
     ),
     sec('Pelage', 'fur', FURS, (id) => h('i.swatch', { style: { background: FURS[id].c } })),
-    sec('Motif', 'pattern', PATTERNS, (id) => h('img.mini', { src: catPortraitURL({ ...L, pattern: id }, {}, 56), alt: '' })),
+    sec('Motif', 'pattern', PATTERNS, (id) => ui.lookImg({ ...L, pattern: id }, 56, 'mini')),
     h('div.look-sec', null, h('h4', null, 'Couleur du motif'), h('div.look-opts', null, PATTERN_COLORS.map((c) => h('button.look-opt.sw', { cls: L.pcolor === c ? 'on' : '', onclick: () => g.pickLook('pcolor', c) }, h('i.swatch', { style: { background: c } }))))),
     sec('Yeux', 'eye', EYES, (id) => h('i.swatch.eye', { style: { background: EYES[id].c } })),
     h('button.toggle', { cls: L.eye2 ? 'on' : '', onclick: () => g.toggleHetero() }, h('span', { html: `Yeux vairons (deux couleurs) ${st.unlocks.includes('eye2:on') ? '' : '· ' + icon('gems') + HETERO_COST}` }), h('i')),
-    sec('Regard', 'eyeStyle', EYE_STYLES, (id) => h('img.mini', { src: catPortraitURL({ ...L, eyeStyle: id }, {}, 56), alt: '' })),
-    sec('Oreilles', 'ears', EARS, (id) => h('img.mini', { src: catPortraitURL({ ...L, ears: id }, {}, 56), alt: '' })),
+    sec('Regard', 'eyeStyle', EYE_STYLES, (id) => ui.lookImg({ ...L, eyeStyle: id }, 56, 'mini')),
+    sec('Oreilles', 'ears', EARS, (id) => ui.lookImg({ ...L, ears: id }, 56, 'mini')),
     sec('Queue', 'tail', TAILS, (id) => h('b.tailtxt', null, { normal: '〰', fluffy: '☁', short: '•' }[id])),
   );
 }
@@ -229,7 +235,7 @@ function costumesBlock(ui, g) {
       const cur = st.costumes.current === c.id;
       const bon = [c.atk ? `+${c.atk}% ATQ` : '', c.hp ? `+${c.hp}% PV` : '', c.crit ? `+${c.crit}% Crit.` : '', c.critDmg ? `+${c.critDmg}% Dég. crit.` : '', c.dodge ? `+${c.dodge}% Esquive` : ''].filter(Boolean).join(' · ') || 'Classique';
       const btn = cur ? h('button.btn.sm.gray', { disabled: true }, 'Porté') : owned ? h('button.btn.sm.green', { onclick: () => g.setCostume(c.id) }, 'Porter') : h('button.btn.sm.purple', { onclick: () => g.costumeSource(c.id) }, 'Obtenir');
-      return h('div.skin-card', { cls: 'r' + c.r + (owned ? '' : ' locked'), style: rr(c.r) }, h('img', { src: g.costumeURL(c.id), alt: '' }), h('b', null, c.name), h('small.bonus', null, bon), h('small.muted', null, owned ? 'Bonus actif' : c.src), btn);
+      return h('div.skin-card', { cls: 'r' + c.r + (owned ? '' : ' locked'), style: rr(c.r) }, ui.costumeImg(c.id), h('b', null, c.name), h('small.bonus', null, bon), h('small.muted', null, owned ? 'Bonus actif' : c.src), btn);
     })),
   );
 }
@@ -275,6 +281,32 @@ function artifactsPanel(ui, g) {
   );
 }
 
+// ligne de classement (Tour, Boss mondial)
+function rankRow(r, value) {
+  const C = r.cls && CLASS_BY_ID[r.cls];
+  return h('div.rank-row', { cls: (r.me ? 'me ' : '') + (r.rank <= 3 ? 'top' + r.rank : '') },
+    h('b.rk', null, r.rank <= 3 ? ['🥇', '🥈', '🥉'][r.rank - 1] : r.rank),
+    h('i.rk-cls', { style: { background: C ? C.color : '#5e45ad' } }),
+    h('span.grow', null, r.name, C ? h('small.muted', null, ' · ' + C.role) : null),
+    h('b.rk-floor', null, value));
+}
+// classement de la Tour (modale)
+function towerRankModal(ui, g) {
+  const st = g.st;
+  const board = towerBoard(st);
+  const me = board.find((r) => r.me);
+  const row = (r) => rankRow(r, 'Étage ' + r.floor);
+  const top = board.slice(0, 50);
+  const body = h('div.col', null,
+    h('div.rank-me', null, h('b', null, `Vous : ${me.rank}e`), h('span', null, `record étage ${st.tower.best}`)),
+    h('div.milestone', null, h('b', null, 'Récompense de la semaine (selon votre rang)'), chipsOf(ui, g, towerRankReward(me.rank)),
+      h('button.btn', { cls: g.towerRankClaimable() ? 'gold' : 'gray', disabled: !g.towerRankClaimable(), onclick: () => { g.claimTowerRank(); close(); } }, g.towerRankClaimable() ? 'Récupérer' : st.tower.best > 0 ? 'Déjà récupérée cette semaine' : 'Conquérez un étage')),
+    h('p.small.muted', null, 'Les autres joueurs grimpent aussi chaque jour. N°1 : titre exclusif « Maître de la Tour ».'),
+    h('div.rank-list', null, top.map(row), me.rank > 50 ? [h('div.rank-gap', null, '…'), row(me)] : null),
+  );
+  const close = ui.modal({ title: 'Classement de la Tour', body });
+}
+
 // ====================================================================== CHATONS
 const kittens = {
   title: 'Chatons',
@@ -286,7 +318,7 @@ const kittens = {
       const ks = kittenStats(st, k.id);
       const E = ELEMENTS[k.el];
       const body = h('div.detail', { style: rr(k.r) },
-        h('div.detail-top', { cls: 'r' + k.r }, h('img', { src: g.kittenURL(k.id), alt: '' }), h('div', null, h('b', null, k.name), h('span.irar', null, RARITIES[k.r].name), h('div', { style: { color: E.color } }, 'Élément ' + E.name), h('div.muted', null, o ? `Niveau ${o.lvl}` : 'Pas encore trouvé'))),
+        h('div.detail-top', { cls: 'r' + k.r }, ui.kittenImg(k.id), h('div', null, h('b', null, k.name), h('span.irar', null, RARITIES[k.r].name), h('div', { style: { color: E.color } }, 'Élément ' + E.name), h('div.muted', null, o ? `Niveau ${o.lvl}` : 'Pas encore trouvé'))),
         h('ul.lines', null,
           h('li', null, `Attaque « ${(KITTEN_ATTACKS[k.id] || {}).name} » : ${fmt(ks.atkMult * 100)}% ATQ toutes les 2,2 s${k.r >= 5 ? ' + version ULTIME' : ''}`),
           h('li', null, `Si équipé : +${fmt(ks.equipAtk)}% ATQ et ${KBONUS[k.bonus].name} +${fmt(ks.bonus * (['gold', 'luck', 'critDmg', 'skillDmg', 'bossDmg'].includes(k.bonus) ? 2 : k.bonus === 'hp' ? 1.5 : 0.5))}%`),
@@ -312,9 +344,9 @@ const kittens = {
         const id = data.equipped[i];
         if (!id) return h('div.eq-slot.empty', null, '+');
         const k = KITTEN_BY_ID[id];
-        return h('button.eq-slot', { cls: 'r' + k.r, style: rr(k.r), onclick: () => detail(k) }, h('img', { src: g.kittenURL(id), alt: '' }), h('b', null, 'Nv ' + data.owned[id].lvl));
+        return h('button.eq-slot', { cls: 'r' + k.r, style: rr(k.r), onclick: () => detail(k) }, ui.kittenImg(id), h('b', null, 'Nv ' + data.owned[id].lvl));
       })),
-      (() => { const fid = bannerKitten(weekKey()); const fk = KITTEN_BY_ID[fid]; return h('div.banner-card', { style: rr(fk.r) }, h('img', { src: g.kittenURL(fid), alt: '' }), h('div.grow', null, h('small', null, 'CHATON VEDETTE DE LA SEMAINE'), h('b', null, fk.name), h('span', null, `${RARITIES[fk.r].name} · « ${KITTEN_ATTACKS[fid].name} » · 50 % des tirages ${RARITIES[fk.r].name}`))); })(),
+      (() => { const fid = bannerKitten(weekKey()); const fk = KITTEN_BY_ID[fid]; return h('div.banner-card', { style: rr(fk.r) }, ui.kittenImg(fid), h('div.grow', null, h('small', null, 'CHATON VEDETTE DE LA SEMAINE'), h('b', null, fk.name), h('span', null, `${RARITIES[fk.r].name} · « ${KITTEN_ATTACKS[fid].name} » · 50 % des tirages ${RARITIES[fk.r].name}`))); })(),
       h('div.summon-card.pets', null,
         h('div.summon-top', null, h('b', null, 'Panier des Chatons'), h('span.have', { html: icon('eggs') + ' ' + fmt(have) + ' · ' + icon('milk') + ' ' + st.res.milk })),
         h('div.summon-btns', null, sumBtn(1, 80), sumBtn(10, 700), sumBtn(35, 2400)),
@@ -328,7 +360,7 @@ const kittens = {
         const seen = data.seen.includes(k.id);
         const need = o ? dupNeed(o.lvl) : 1;
         return h('button.coll', { cls: 'r' + k.r + (o ? '' : ' locked') + (o && o.copies >= need ? ' can' : ''), style: rr(k.r), onclick: () => detail(k) },
-          h('img', { src: g.kittenURL(k.id), alt: '', cls: seen ? '' : 'silhouette' }),
+          ui.kittenImg(k.id, seen ? '' : 'silhouette'),
           h('b', null, seen ? k.name : '???'),
           h('small', { style: { color: ELEMENTS[k.el].color } }, ELEMENTS[k.el].name),
           o ? h('div.bar', null, h('i', { style: { transform: `scaleX(${Math.min(1, o.copies / need)})` } }), h('small', null, `Nv ${o.lvl}`)) : h('small.muted', null, RARITIES[k.r].name));
@@ -353,7 +385,7 @@ const atelier = {
             h('div.set-head', null, h('b', null, S.name), h('small', null, `Héros niv. ${S.lvl} · Artisan ${S.artisan} · ${RARITIES[S.r].name}`)),
             h('div.set-bonus', null, Object.entries(S.bonus).map(([n, b]) => h('span', null, `${n} pièces : ` + Object.entries(b).map(([k, v]) => `+${v}% ${k === 'atk' ? 'ATQ' : k === 'hp' ? 'PV' : SUBSTATS[k] ? SUBSTATS[k].name : k}`).join(', ')))),
             h('div.set-cost', null, S.cost.map(([id, n]) => h('span.cost-it', { cls: (st.mats[id] || 0) >= n ? 'ok' : 'ko' }, h('span', { html: resIcon(id) }), `${fmt(st.mats[id] || 0)}/${n}`)), h('span.cost-it', { cls: st.res.gold >= c.gold ? 'ok' : 'ko', html: icon('gold') + fmt(c.gold) })),
-            h('div.set-pieces', null, Object.entries(S.pieces).map(([slot, base]) => h('button.piece', { disabled: locked, onclick: () => g.craftPiece(S.id, slot) }, h('img', { src: itemIconURL(slot, base, S.r), alt: '' }), h('small', null, slotName(slot))))),
+            h('div.set-pieces', null, Object.entries(S.pieces).map(([slot, base]) => h('button.piece', { disabled: locked, onclick: () => g.craftPiece(S.id, slot) }, ui.itemImg(slot, adaptBase(st.hero.cls, slot, base), S.r), h('small', null, slotName(slot))))),
             locked ? h('p.small.muted', null, !c.heroOk ? `Niveau de héros ${S.lvl} requis` : `Artisan niveau ${S.artisan} requis`) : null,
           );
         }),
@@ -416,8 +448,8 @@ const atelier = {
 // ====================================================================== COMBAT (PvP + PvE)
 const combat = {
   title: 'Combat',
-  tabs: [['tower', 'Tour des Défis'], ['lairs', 'Repaires'], ['arena', 'Arène'], ['war', 'Gouttières'], ['dungeons', 'Donjons']],
-  tabDot: (g, id) => (id === 'lairs' ? g.st.lairs.tickets > 0 && g.st.camp.best >= 10 : id === 'dungeons' ? DUNGEONS.some((d) => g.st.dungeons[d.id].keys > 0) : id === 'arena' ? g.st.arena.tickets > 0 || g.arenaDailyClaimable() : id === 'war' ? g.st.war.energy > 0 || tributeAvailable(g.st) : id === 'tower' ? (g.st.daily.q.tower || 0) < 2 : false),
+  tabs: [['tower', 'Tour des Défis'], ['worldboss', 'Boss mondial'], ['lairs', 'Repaires'], ['arena', 'Arène'], ['war', 'Gouttières'], ['dungeons', 'Donjons']],
+  tabDot: (g, id) => (id === 'worldboss' ? g.st.wb.tickets > 0 || g.wbClaimable() : id === 'lairs' ? g.st.lairs.tickets > 0 && g.st.camp.best >= 10 : id === 'dungeons' ? DUNGEONS.some((d) => g.st.dungeons[d.id].keys > 0) : id === 'arena' ? g.st.arena.tickets > 0 || g.arenaDailyClaimable() : id === 'war' ? g.st.war.energy > 0 || tributeAvailable(g.st) : id === 'tower' ? (g.st.daily.q.tower || 0) < 2 : false),
   render(ui, g, tab) {
     const st = g.st;
     if (tab === 'arena') {
@@ -483,6 +515,22 @@ const combat = {
         })),
       );
     }
+    if (tab === 'worldboss') {
+      const W = st.wb, { B } = g.wbToday(), board = wbBoard(st), me = board.find((r) => r.me), vipMax = VIP_PERKS[g.stats.vip].dungeonBuys;
+      const stat = (l, v) => h('div.wb-stat', null, h('small', null, l), h('b', null, v));
+      return h('div.col', null,
+        h('div.wb-head', null, ui.monsterImg(B.boss, 3, 'wb-img'),
+          h('div.grow', null, h('small', null, 'TITAN DU JOUR'), h('b', null, B.name), h('p.small', null, '30 secondes pour infliger un maximum de dégâts. Le titan change chaque jour et s\'adapte à votre puissance.'))),
+        h('div.wb-stats', null, stat('Dégâts du jour', fmt(W.today)), stat('Rang', W.today ? me.rank + 'e' : '—'), stat('Meilleur assaut', fmt(W.best))),
+        h('div.btn-pair', null,
+          h('button.btn', { cls: W.tickets > 0 ? 'red' : 'gray', disabled: W.tickets <= 0, onclick: () => g.startWorldBoss() }, h('span', null, 'Attaquer !'), h('small', null, `${W.tickets} ticket(s) · 3 gratuits/jour`)),
+          h('button.btn', { cls: W.buys < vipMax ? 'purple' : 'gray', onclick: () => g.buyWbTicket() }, h('span', null, '+1 ticket'), h('small', { html: icon('gems') + ' ' + g.wbBuyCost() + ` · ${W.buys}/${vipMax}` }))),
+        h('div.milestone', null, h('b', null, 'Récompense du jour (selon votre rang)'), chipsOf(ui, g, wbRankReward(me.rank)),
+          h('button.btn', { cls: g.wbClaimable() ? 'gold' : 'gray', disabled: !g.wbClaimable(), onclick: () => g.claimWb() }, g.wbClaimable() ? 'Récupérer' : W.today ? 'Récupérée — revenez demain' : 'Attaquez au moins une fois')),
+        h('h4', null, 'Classement du jour'),
+        h('div.rank-list', null, board.slice(0, 20).map((r) => rankRow(r, fmt(r.dmg))), me.rank > 20 ? [h('div.rank-gap', null, '…'), rankRow(me, fmt(me.dmg))] : null),
+      );
+    }
     if (tab === 'lairs') {
       const L = st.lairs, vipMax = VIP_PERKS[g.stats.vip].dungeonBuys;
       return h('div.col', null,
@@ -490,7 +538,7 @@ const combat = {
           h('button.btn.sm', { cls: L.buys < vipMax ? 'purple' : 'gray', onclick: () => g.buyLairTicket() }, h('span', null, '+1 ticket'), h('small', { html: icon('gems') + ' ' + lairBuyCost(L.buys) }))),
         h('p.small.muted', null, 'Affrontez à nouveau les boss de map déjà vaincus. Chaque victoire donne à coup sûr leur matériau de boss, indispensable aux panoplies de l\'Atelier. Le boss s\'adapte à votre progression.'),
         h('div.lairs', null, g.lairList().map((x) => h('div.lair', { cls: x.open ? '' : 'locked' },
-          h('img.lair-img', { src: monsterPortrait(x.B.boss, g.era().variant), alt: '' }),
+          ui.monsterImg(x.B.boss, g.era().variant, 'lair-img'),
           h('div.grow', null, h('b', null, x.B.name), h('small.muted', null, `Map ${x.ch} · ${x.name}`), h('div.lair-drop', { html: resIcon(x.B.drop) + ' ' + RES_BY_ID[x.B.drop].name })),
           x.open ? h('button.btn.sm', { cls: L.tickets > 0 ? 'red' : 'gray', onclick: () => g.startLair(x.biome) }, 'Combattre') : h('span.small.muted', null, `Boss ${x.ch}-10`)))),
       );
@@ -500,7 +548,8 @@ const combat = {
       const floors = [f + 3, f + 2, f + 1, f];
       const nextM = TOWER_MILESTONES.find((m) => m >= f) || (Math.ceil(f / 100) * 100);
       return h('div.col', null,
-        h('div.tower-head', null, h('div.grow', null, h('b', null, `Étage ${f}`), h('div.small', null, `Record : ${st.tower.best} · étages infinis`)), h('span.have', null, fmt(st.res.towerTokens) + ' jetons')),
+        h('div.tower-head', null, h('div.grow', null, h('b', null, `Étage ${f}`), h('div.small', null, `Record : ${st.tower.best} · étages infinis, difficulté sans plafond`)), h('span.have', null, fmt(st.res.towerTokens) + ' jetons')),
+        h('button.btn.gold.wide.rank-btn', { onclick: () => towerRankModal(ui, g) }, h('span', null, `Classement : ${g.towerRank()}e sur 100`), h('small', null, g.towerRankClaimable() ? 'Récompense de la semaine disponible !' : 'Qui grimpera le plus haut ?'), g.towerRankClaimable() ? h('i.dot') : null),
         h('div.tower3', null, floors.map((x) => {
           const info = towerFloorInfo(x);
           const ms = towerMilestone(x);
@@ -508,6 +557,7 @@ const combat = {
             h('div.tf-num', null, x),
             h('div.grow', null,
               h('b', null, info.boss ? 'Gardien' : 'Défi'),
+              (() => { const rec = powerForStage(towerStage(x)) * (info.boss ? 1.5 : 1) * (info.mods.length ? 1.15 : 1); return h('small.rec', { cls: g.stats.power >= rec ? 'ok' : 'ko', html: icon('power') + ' conseillé ' + fmt(rec) }); })(),
               info.mods.length ? h('div.mods', null, info.mods.map((m) => h('span.mod', null, m.name + ' : ' + m.desc))) : h('small.muted', null, 'Sans modificateur'),
               chipsOf(ui, g, ms ? { ...towerFloorReward(x), ...ms } : towerFloorReward(x))),
             x === f ? h('button.btn.green', { onclick: () => g.startTower() }, 'Combattre') : h('span.muted.small', null, 'À venir'));
@@ -529,7 +579,7 @@ const combat = {
       const ds = st.dungeons[d.id];
       const rew = dungeonReward(d.id, ds.lvl, st.camp.best);
       return h('div.dungeon', { style: { '--dc': d.color } },
-        h('img.dg-img', { src: monsterPortrait(d.enemy), alt: '' }),
+        ui.monsterImg(d.enemy, 0, 'dg-img'),
         h('div.grow', null, h('b', null, d.name), h('div.muted.small', null, `Niveau ${ds.lvl} · ${d.desc}`), chipsOf(ui, g, rew), h('div.keys', { html: icon('key') + ` ${ds.keys}/${DUNGEON_FREE_KEYS}` })),
         h('div.dg-btns', null,
           h('button.btn.sm.green', { disabled: ds.keys <= 0, onclick: () => g.startDungeon(d.id) }, 'Combattre'),
@@ -681,7 +731,7 @@ const shop = {
           h('div.orow', { style: { '--rc': '#fff27a' } }, h('i'), h('span', null, `Une relique (au choix du sort)`), h('b', null, RELIC_CHEST.relicPct + '%'), h('em', null, `${pct(each)} chacune`)),
           RELIC_CONSOLATION.map((c) => h('div.orow', { style: { '--rc': '#8a6cf0' } }, h('i'), h('span', null, g.previewRewards(c.rewards).map((r) => `${fmt(r.v)} ${(RES_BY_ID[r.k] || {}).name || ({ yarn: 'pelotes', eggs: 'paniers', feathers: 'plumes', stone: 'pierre de protection', clover: 'trèfle' })[r.k] || r.k}`).join(', ')), h('b', null, pct(c.p * (100 - RELIC_CHEST.relicPct) / tot)), null))),
         h('h4', null, 'Les reliques'),
-        RELICS.map((R) => h('div.relic-row', null, h('img', { src: itemIconURL(R.slot, R.base, 8), alt: '' }), h('div.grow', null, h('b', null, R.name), h('small', null, `${slotName(R.slot)} · ${R.desc}`)), [...Object.values(st.gear), ...st.bag].some((x) => x && x.relic === R.id) ? h('span.check', null, '✓') : null)),
+        RELICS.map((R) => h('div.relic-row', null, ui.itemImg(R.slot, R.base, 8), h('div.grow', null, h('b', null, R.name), h('small', null, `${slotName(R.slot)} · ${R.desc}`)), [...Object.values(st.gear), ...st.bag].some((x) => x && x.relic === R.id) ? h('span.check', null, '✓') : null)),
       );
     }
     if (tab === 'artifacts') {
@@ -703,7 +753,7 @@ const shop = {
           const owned = it.kind === 'aura' ? C.auras.includes(it.id) : it.kind === 'frame' ? C.frames.includes(it.id) : st.costumes.owned.includes(it.id);
           const R = it.kind === 'aura' ? AURAS.find((a) => a.id === it.id) : it.kind === 'frame' ? FRAMES.find((f) => f.id === it.id) : COSTUMES.find((c) => c.id === it.id);
           return h('div.style-card', { cls: 'r' + R.r, style: rr(R.r) },
-            it.kind === 'aura' ? h('span.aura-prev', { style: { '--a1': R.colors[0], '--a2': R.colors[1] || R.colors[0] } }) : it.kind === 'frame' ? h('span.frame-prev', { dataset: { frame: R.id } }, h('img', { src: g.portrait(), alt: '' })) : h('img.cos-img', { src: g.costumeURL(R.id), alt: '' }),
+            it.kind === 'aura' ? h('span.aura-prev', { style: { '--a1': R.colors[0], '--a2': R.colors[1] || R.colors[0] } }) : it.kind === 'frame' ? h('span.frame-prev', { dataset: { frame: R.id } }, h('img', { src: g.portrait(), alt: '' })) : ui.costumeImg(R.id, 'cos-img'),
             h('b', null, R.name), h('small', null, it.kind === 'aura' ? 'Aura' : it.kind === 'frame' ? 'Cadre' : 'Costume'),
             h('button.btn.xs', { cls: owned ? 'gray' : 'purple', disabled: owned, onclick: () => g.buyStyle(i) }, owned ? 'Possédé' : h('span', { html: icon('gems') + fmt(it.gems) })));
         })),
@@ -864,4 +914,4 @@ const settings = {
   },
 };
 
-export const PANELS = { hero, kittens, atelier, combat, market, shop, quests, ads, firstRecharge, settings };
+export const PANELS = { hero, kittens, atelier, combat, market, shop, quests, ads, firstRecharge, settings, guild: guildPanel, event: eventPanel, bestiary: bestiaryPanel };

@@ -1,10 +1,11 @@
 {
   "name": "miaou-empire",
   "version": "1.0.0",
-  "description": "Miaou Empire — jeu mobile idle RPG 3D avec des chats",
+  "description": "Miaou Empire — jeu mobile idle RPG 2D avec des chats",
   "scripts": {
     "build": "node build.mjs",
     "sim": "node scripts/sim.mjs",
+    "sim:classes": "node scripts/classes.mjs",
     "serve": "npx --yes http-server dist -p 8080 -c-1"
   },
   "keywords": [],

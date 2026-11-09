@@ -14,20 +14,23 @@ const BOT_SUFFIX = ['Royal', 'XXL', 'Dark', '_FR', 'Turbo', 'Suprême', '77', 'I
 const FURS = ['roux', 'creme', 'gris', 'bleu', 'noir', 'blanc', 'choco', 'cannelle', 'fauve', 'lilas', 'argent', 'rose', 'menthe', 'lavande', 'dore', 'ombre'];
 const PATS = ['solid', 'tabby', 'tiger', 'tuxedo', 'calico', 'siamese', 'spots', 'tortie'];
 const EYES = ['vert', 'bleu', 'ambre', 'or', 'cuivre', 'violet', 'glace', 'rouge'];
-const WEAPONS = ['claws', 'sword', 'katana', 'axe', 'hammer', 'staff', 'wand', 'bow', 'scythe', 'trident', 'fish', 'ladle'];
 const HATS = ['beanie', 'wizard', 'crown', 'helmet', 'cowboy', 'beret', 'bandana', 'tophat', 'flowers', 'viking', 'chef', 'party', 'cap', null, null];
 const FACES = ['round', 'sun', 'monocle', 'patch', 'ninja', 'star', 'visor', 'stache', null, null, null];
-const ARMORS = ['tunic', 'plate', 'robe', 'hoodie', 'kimono', 'royal'];
 const WINGS = ['angel', 'bat', 'butterfly', 'dragon', 'fairy', 'jetpack', 'fishpack', null, null, null];
 const KIT = ['mistigri', 'caramel', 'biscotte', 'charbon', 'flocon', 'moka', 'praline', 'grisou', 'tigrou', 'flammeche', 'givre', 'etincelle', 'mousse', 'ombre', 'aurore', 'pyro', 'sphinxou', 'ninja', 'samourai', 'drakou', 'licorne', 'kitsune', 'seraphin', 'belzechat', 'astro'];
 
 // Génère l'apparence + l'équipement visible d'un adversaire (PvP), selon sa « classe » (0 faible → 1 baleine)
+import { CLASSES } from './classes.js';
 export function makeCatLoadout(rnd, tier) {
   const pick = (a) => a[Math.floor(rnd() * a.length)];
   const r = () => Math.max(0, Math.min(8, Math.round(tier * 8 + (rnd() - 0.5) * 2)));
   const ap = { fur: pick(FURS), pattern: pick(PATS), eye: pick(EYES), eyeStyle: pick(['round', 'round', 'fierce', 'sleepy', 'sparkle']), ears: pick(['normal', 'normal', 'fold', 'lynx', 'big']), tail: pick(['normal', 'normal', 'fluffy', 'short']) };
   if (tier > 0.92 && rnd() < 0.5) Object.assign(ap, { fur: 'galaxie', pattern: 'galaxy', eye: 'galaxie' });
-  const gear = { weapon: { base: pick(WEAPONS), r: r() }, armor: { base: pick(ARMORS), r: r() } };
+  // les rivaux ont aussi une classe (et son arme / son armure)
+  const C = pick(CLASSES);
+  ap.cls = C.id;
+  const spec = pick(C.specs).id;
+  const gear = { weapon: { base: pick(C.weapons), r: r() }, armor: { base: pick(C.armors), r: r() } };
   const hat = pick(HATS); if (hat) gear.hat = { base: hat, r: r() };
   const face = pick(FACES); if (face) gear.face = { base: face, r: r() };
   const w = tier > 0.3 ? pick(WINGS) : null; if (w) gear.wings = { base: w, r: r() };
@@ -36,7 +39,7 @@ export function makeCatLoadout(rnd, tier) {
   const nk = 1 + Math.min(4, Math.floor(tier * 5 + rnd()));
   const kIdx = Math.min(KIT.length - 1, Math.floor(tier * (KIT.length - 4)));
   const kittens = Array.from({ length: nk }, () => KIT[Math.max(0, Math.min(KIT.length - 1, kIdx + Math.floor((rnd() - 0.6) * 8)))]);
-  return { ap, gear, kittens };
+  return { ap, gear, kittens, spec };
 }
 
 export function makeBots(seed) {
@@ -73,13 +76,13 @@ export function defaultState() {
     lastSeen: now,
     seed,
     name: 'Minou',
-    res: { gold: 300, gems: 150, yarn: 300, feathers: 5, eggs: 3, arenaCoins: 0, warCoins: 0, towerTokens: 0, speedMin: 30, stone: 0, scroll: 0, clover: 0, milk: 0, relicKeys: 0 },
+    res: { gold: 300, gems: 150, yarn: 300, feathers: 5, eggs: 3, arenaCoins: 0, warCoins: 0, towerTokens: 0, speedMin: 30, stone: 0, scroll: 0, clover: 0, milk: 0, relicKeys: 0, guildCoins: 0, fest: 0 },
     artifacts: { owned: {}, equipped: [null, null, null, null, null, null], pulls: 0 },
     cos: { auras: [], aura: null, titles: ['kitten'], title: 'kitten', frames: ['basic'], frame: 'basic' },
     potions: {},
     loyalty: [],
     mats: Object.fromEntries(RESOURCES.map((r) => [r.id, 0])),
-    hero: { lvl: 1, xp: 0 },
+    hero: { lvl: 1, xp: 0, cls: null, spec: null, clsChanges: 0, specChanges: 0 },
     gear: { weapon: null, hat: null, face: null, armor: null, cape: null, wings: null, gloves: null, boots: null, collar: null, ring: null },
     bag: [],
     box: { lvl: 1, upUntil: 0, auto: false, batch: 0, stopAt: 4, autoBreak: false },
@@ -93,8 +96,13 @@ export function defaultState() {
     boost: { cloverUntil: 0, atkUntil: 0, hpUntil: 0, goldUntil: 0, luckUntil: 0, royalUntil: 0 },
     relic: { pulls: 0, pity: 0 },
     camp: { ch: 1, st: 1, best: 0, auto: true, failStreak: 0 },
-    tower: { floor: 1, best: 0, shop: {}, reviveBuff: 0 },
+    tower: { floor: 1, best: 0, shop: {}, reviveBuff: 0, weekClaim: '' },
     lairs: { tickets: 3, buys: 0 },
+    wb: { tickets: 3, buys: 0, today: 0, best: 0, ratio: 0, claimed: '' },
+    guild: { id: null, mine: null, joinedAt: 0, leftAt: 0, tree: {}, best: 0, total: 0, week: '', day: '', tries: 2, checkin: false, goldDon: false, gemDon: 0, xpGiven: 0, chests: 0, boss: null, shop: {}, claimedWeek: '', log: [], contrib: 0 },
+    guilds: null,
+    event: { week: '', pts: 0, acc: {}, claimed: [], shop: {} },
+    bestiary: {}, bestiaryClaimed: {},
     dungeons: Object.fromEntries(DUNGEONS.map((d) => [d.id, { lvl: 1, keys: DUNGEON_FREE_KEYS, buys: 0 }])),
     arena: { tickets: ARENA_FREE_TICKETS, buys: 0, wins: 0, claimedKey: '', shop: {}, bots: null, order: null, season: weekKey(), best: ARENA_SIZE },
     market: null,
@@ -161,7 +169,7 @@ export function ensureDaily(st) {
     st.daily = {
       key: k,
       q: Object.fromEntries(DAILY_QUESTS.map((q) => [q.id, 0])),
-      qDone: [], pts: 0, chests: [], ads: 0, freeGift: false, vipGift: false, cardGems: false, summonFree: false, changeBought: 0, artFree: false, towerDaily: false,
+      qDone: [], pts: 0, chests: [], ads: 0, freeGift: false, vipGift: false, cardGems: false, summonFree: false, changeBought: 0, artFree: false, towerDaily: false, quickAfk: 0,
     };
     st.daily.q.login = 1;
     for (const d of DUNGEONS) {
@@ -170,6 +178,7 @@ export function ensureDaily(st) {
     }
     st.lairs.tickets = Math.max(st.lairs.tickets, 3);
     st.lairs.buys = 0;
+    st.wb.tickets = Math.max(st.wb.tickets, 3); st.wb.buys = 0; st.wb.today = 0;
     st.arena.tickets = Math.max(st.arena.tickets, ARENA_FREE_TICKETS);
     st.arena.buys = 0;
     if (st.war) { st.war.energy = Math.max(st.war.energy, WAR_ENERGY); st.war.buys = 0; }

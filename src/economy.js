@@ -3,16 +3,18 @@ import {
   boxWeights, SLOTS, SLOT_BY_ID, RARITY_SUBS, SUBSTAT_KEYS, SUBSTATS, xpToNext, recycleGold, boxUpgradeGold,
   boxUpgradeSeconds, BOX_MAX_LEVEL, SKILLS, SKILL_RARITY_ODDS, SKILL_PITY_LEG, SKILL_PITY_DIV,
   dupNeed, trainingCost, TRAININGS, idlePerHour, VIP_PERKS, vipLevel, OFFLINE_CAP_H, DAILY_QUESTS, PASS_XP_PER_TIER, STAT_GROWTH,
+  biomeForChapter, BIOMES,
 } from './config.js';
 import {
   KITTENS, KITTEN_ODDS, KITTEN_PITY_LEG, KITTEN_PITY_MYTH, RES_BY_ID, ENEMY_DROPS, DROP_CHANCE, GLOBAL_DROPS, SETS, SET_BY_ID,
   artisanXpNext, craftXp, craftGold, FORGE_MAX, FORGE_RATES, forgeCost, breakRunes, RELICS, RELIC_BY_ID, RELIC_CHEST, RELIC_CONSOLATION, BOX_RELIC_CHANCE, LOOK_UNLOCK,
+  BIOME_ENEMIES,
 } from './content.js';
 import { weightedPick, randi, rand, pick, uid } from './util.js';
 import { itemPower, computeStats } from './stats.js';
 import {
   ARTIFACTS, ARTIFACT_BY_ID, ARTIFACT_MAX_STARS, artifactFragsNeed, artifactLevelCost, ARTIFACT_CHEST, POTION_BY_ID, TRANSMUTE_RATIO,
-  towerFloorReward, towerMilestone, AURA_BY_ID, TITLE_BY_ID, FRAME_BY_ID, KITTEN_ATTACKS, BANNER_POOL,
+  towerFloorReward, towerMilestone, AURA_BY_ID, TITLE_BY_ID, FRAME_BY_ID, KITTEN_ATTACKS, BANNER_POOL, eraOf,
 } from './content3.js';
 import { RESOURCES } from './content.js';
 
@@ -22,6 +24,9 @@ function rollSubs(r, n, guaranteed) {
   if (guaranteed) { keys.splice(keys.indexOf(guaranteed), 1); keys.unshift(guaranteed); }
   return keys.slice(0, n).map((k) => ({ k, v: +(SUBSTATS[k].base * (0.6 + Math.random() * 0.4) * (1 + 0.45 * r)).toFixed(1) }));
 }
+import { allowedBases, canEquip, adaptBase } from './classes.js';
+import { guildFx } from './guild.js';
+import { eventAdd } from './event.js';
 export function makeRelic(st, id) {
   const R = RELIC_BY_ID[id];
   return { id: uid(), slot: R.slot, base: R.base, r: 8, l: st.hero.lvl, q: 1.1, subs: rollSubs(8, 4), relic: id };
@@ -30,7 +35,8 @@ export function rollItem(st) {
   if (Math.random() < BOX_RELIC_CHANCE) return makeRelic(st, pick(RELICS).id);
   const r = weightedPick(boxWeights(st.box.lvl));
   const slot = pick(SLOTS);
-  const base = pick(Object.keys(slot.bases));
+  // armes et armures : uniquement celles de la classe du héros
+  const base = pick(allowedBases(st.hero.cls, slot.id) || Object.keys(slot.bases));
   const l = Math.max(1, st.hero.lvl + randi(-2, 1));
   return { id: uid(), slot: slot.id, base, r, l, q: +rand(0.92, 1.08).toFixed(3), subs: rollSubs(r, RARITY_SUBS[r]) };
 }
@@ -63,6 +69,7 @@ export function addToBag(st, it) {
 }
 // Équipe un objet ; l'ancien va au sac s'il est précieux, sinon il est recyclé (or ou runes)
 export function equipItem(st, it, breakOld = false) {
+  if (!canEquip(st.hero.cls, it)) return null;
   const idx = st.bag.findIndex((x) => x.id === it.id);
   if (idx >= 0) st.bag.splice(idx, 1);
   const cur = st.gear[it.slot];
@@ -83,6 +90,7 @@ export function openBoxes(st, n, autoEquip = true) {
   st.res.yarn -= n;
   st.stats.opens += n;
   bumpQuest(st, 'open', n);
+  eventAdd(st, 'open', n);
   addPassXp(st, n * 0.05);
   const items = [];
   let gold = 0, runes = 0;
@@ -91,6 +99,7 @@ export function openBoxes(st, n, autoEquip = true) {
   const lvUps = gainHeroXp(st, n);
   if (autoEquip) {
     for (const it of items) {
+      if (!canEquip(st.hero.cls, it)) { const d = disposeItem(st, it, st.box.autoBreak); gold += d.gold; runes += d.runes; continue; }
       if (it.relic) { relics.push(it); const cur = st.gear[it.slot]; if (!cur || itemPower(it, st.hero.lvl) > itemPower(cur, st.hero.lvl)) { equipItem(st, it); equipped.push(it); } else addToBag(st, it); continue; }
       const cur = st.gear[it.slot];
       const margin = keepable(cur) ? 1.15 : 1; // une pièce de panoplie / forgée / relique n'est remplacée que si nettement meilleure
@@ -228,7 +237,7 @@ export function idleRate(st, S) {
   const gp = (S || computeStats(st)).goldPct || 0;
   let mult = 1 + perks.idle / 100;
   if (st.iap.monthlyUntil > Date.now()) mult += 0.1;
-  if (st.iap.lifetime) mult += 0.25;
+  mult += (guildFx(st).afk || 0) / 100; // arbre de guilde : Patrouille organisée
   return { gold: base.gold * mult * (1 + gp / 100), yarn: base.yarn * mult, mult };
 }
 export function idleCapH(st) {
@@ -238,6 +247,30 @@ export function idlePending(st, S) {
   const h = Math.min(idleCapH(st), (Date.now() - st.idleSince) / 3600000);
   const r = idleRate(st, S);
   return { hours: h, gold: Math.floor(r.gold * h), yarn: Math.floor(r.yarn * h) };
+}
+
+// ------------------------------------------------------------- AFK
+// Butin AFK : or, pelotes, XP, et le butin des monstres de la map en cours (≈ 40 ennemis vaincus par heure),
+// plafonné en heures. La « patrouille éclair » donne 2 h d'AFK tout de suite (1 gratuite par jour).
+export const AFK_KILLS_H = 40;
+export const QUICK_AFK_H = 2;
+export function quickAfkCost(n) { return n === 0 ? 0 : 40 + (n - 1) * 40; }
+export function quickAfkMax(vip) { return 3 + Math.floor(vip / 3); }
+export function afkLoot(st, S, hours) {
+  const r = idleRate(st, S);
+  const out = { goldRaw: Math.floor(r.gold * hours), yarn: Math.floor(r.yarn * hours), xp: Math.floor(hours * (15 + st.hero.lvl * 0.6)) };
+  const s = Math.max(0, st.camp.best - 1);
+  const ch = Math.floor(s / 10) + 1;
+  const kinds = BIOME_ENEMIES[biomeForChapter(ch).id];
+  const era = eraOf(ch, BIOMES.length);
+  const lm = luckMult(st, S) * era.lootMult;
+  const kills = Math.min(800, Math.floor(hours * AFK_KILLS_H));
+  const scratch = { mats: {} };
+  for (let i = 0; i < kills; i++) rollDrops(scratch, kinds[i % kinds.length], false, null, lm);
+  Object.assign(out, scratch.mats);
+  out.eggs = Math.floor(hours / 6);
+  out.feathers = Math.floor(hours / 4);
+  return { loot: out, kills };
 }
 
 // ------------------------------------------------------------- butin des ennemis
@@ -277,7 +310,7 @@ export function craft(st, setId, slot) {
   for (const [id, n] of S.cost) st.mats[id] -= n;
   st.res.gold -= c.gold;
   const q = +(0.85 + Math.pow(Math.random(), 1.6) * 0.37).toFixed(3); // jet : 0.85 → 1.22 (les jets parfaits sont rares)
-  const it = { id: uid(), slot, base: S.pieces[slot], r: S.r, l: c.lvl, q, subs: rollSubs(S.r, RARITY_SUBS[S.r] + 1), set: setId, upg: 0 };
+  const it = { id: uid(), slot, base: adaptBase(st.hero.cls, slot, S.pieces[slot]), r: S.r, l: c.lvl, q, subs: rollSubs(S.r, RARITY_SUBS[S.r] + 1), set: setId, upg: 0 };
   st.artisan.xp += craftXp(S);
   let ups = 0;
   while (st.artisan.lvl < 100 && st.artisan.xp >= artisanXpNext(st.artisan.lvl)) { st.artisan.xp -= artisanXpNext(st.artisan.lvl); st.artisan.lvl++; ups++; }
@@ -355,7 +388,7 @@ export function lookUnlocked(st, cat, id) {
 // ------------------------------------------------------------- récompenses génériques
 // rewards : { gold: heures d'or passif, goldRaw, gems, yarn, feathers, eggs, arenaCoins, warCoins, stone, scroll, clover, milk, relicKeys,
 //             speedH, speedM, costume, look, kitten, skill, xp, relic, <id de ressource> }
-const RES_KEYS = ['gems', 'yarn', 'feathers', 'eggs', 'arenaCoins', 'warCoins', 'towerTokens', 'stone', 'scroll', 'clover', 'milk', 'relicKeys'];
+const RES_KEYS = ['gems', 'yarn', 'feathers', 'eggs', 'arenaCoins', 'warCoins', 'towerTokens', 'stone', 'scroll', 'clover', 'milk', 'relicKeys', 'guildCoins', 'fest'];
 export function grant(st, rewards) {
   const given = [];
   const add = (k, v) => { if (v) given.push({ k, v }); };

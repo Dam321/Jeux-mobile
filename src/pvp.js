@@ -20,6 +20,10 @@ export function serverPower(days) {
 }
 export function daysPlayed(st) { return (Date.now() - st.created) / 864e5; }
 
+// Puissance ↔ étape de campagne (ajusté sur le simulateur : ~+6,4 % de puissance par étape)
+export function stageOfPower(p) { return 16.5 * Math.log(Math.max(1, p)) - 95; }
+export function powerForStage(s) { return Math.exp((s + 95) / 16.5); }
+
 const loadoutCache = new Map();
 export function botLoadout(bot) {
   if (!loadoutCache.has(bot.id + bot.seed)) loadoutCache.set(bot.id + bot.seed, makeCatLoadout(seeded(bot.seed), bot.tier));
@@ -129,3 +133,52 @@ export function ownedTerritories(st) { return TERRITORIES.filter((t) => st.war.t
 export function tributeAvailable(st) { return st.war.tributeKey !== dayKey() && ownedTerritories(st).length > 0; }
 export function warBuyCost(st) { return 80 + st.war.buys * 40; }
 export { WAR_ENERGY, makeBots };
+
+// =====================================================================
+//  Classement de la Tour des Défis : chacun grimpe selon sa puissance
+//  (les rivaux progressent chaque jour) ; récompense hebdomadaire au rang.
+// =====================================================================
+export function botTowerFloor(st, bot) {
+  const j = 0.8 + seeded(bot.seed + 7)() * 0.35; // certains rivaux grimpent plus que d'autres
+  return Math.max(1, Math.round(((stageOfPower(botPower(st, bot)) - 6) / 3.5) * j));
+}
+export function towerBoard(st) {
+  const rows = st.arena.bots.map((b) => ({ id: b.id, name: b.name, floor: botTowerFloor(st, b), vip: b.vip, clan: b.clan, cls: botLoadout(b).ap.cls }));
+  rows.push({ me: true, id: 'me', name: 'Minou (vous)', floor: st.tower.best, cls: st.hero.cls, vip: 0 });
+  rows.sort((a, b) => b.floor - a.floor || (a.me ? -1 : b.me ? 1 : 0));
+  rows.forEach((r, i) => { r.rank = i + 1; });
+  return rows;
+}
+export function towerRankReward(rank) {
+  if (rank === 1) return { gems: 500, towerTokens: 300, title: 'towerMaster' };
+  if (rank <= 3) return { gems: 320, towerTokens: 220 };
+  if (rank <= 10) return { gems: 200, towerTokens: 150 };
+  if (rank <= 30) return { gems: 110, towerTokens: 100 };
+  if (rank <= 60) return { gems: 60, towerTokens: 70 };
+  return { gems: 30, towerTokens: 40 };
+}
+
+// =====================================================================
+//  Boss mondial : classement du jour aux dégâts cumulés (tickets achetables).
+//  Les rivaux frappent selon leur puissance ; les baleines ont plus de tickets.
+// =====================================================================
+export function wbBoard(st) {
+  const k = 2.2; // dégâts d'un assaut ≈ 2,2 × la puissance (échelle fixe, comme les guildes)
+  const day = dayKey();
+  const rows = st.arena.bots.map((b) => {
+    const rnd = seeded(b.seed + day.length * 31 + parseInt(day.replace(/\D/g, '').slice(-4), 10));
+    const tries = 3 + Math.floor(b.vip / 3) + (rnd() < 0.3 ? 1 : 0);
+    return { id: b.id, name: b.name, dmg: botPower(st, b) * k * tries * (0.65 + rnd() * 0.6), cls: botLoadout(b).ap.cls };
+  });
+  rows.push({ me: true, id: 'me', name: 'Minou (vous)', dmg: st.wb.today, cls: st.hero.cls });
+  rows.sort((a, b) => b.dmg - a.dmg);
+  rows.forEach((r, i) => { r.rank = i + 1; });
+  return rows;
+}
+export function wbRankReward(rank) {
+  if (rank === 1) return { gems: 120, artDust: 300, eggs: 5, frags: 10, title: 'bossSlayer' };
+  if (rank <= 3) return { gems: 80, artDust: 200, eggs: 3, frags: 8, title: 'bossSlayer' };
+  if (rank <= 10) return { gems: 50, artDust: 150, eggs: 2, frags: 6 };
+  if (rank <= 30) return { artDust: 100, eggs: 1, frags: 4 };
+  return { artDust: 50, frags: 2 };
+}

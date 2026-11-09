@@ -6,16 +6,20 @@ import { RES_BY_ID, SET_BY_ID, RELIC_BY_ID, KITTEN_BY_ID, ELEMENTS } from '../co
 import { ARTIFACT_BY_ID, AURA_BY_ID, TITLE_BY_ID, FRAME_BY_ID, towerFloorInfo } from '../content3.js';
 import { monsterPortrait } from '../gfx/bestiary.js';
 import { itemMain, itemPower, itemName, SKILL_BY_ID, COSTUME_BY_ID } from '../stats.js';
-import { idlePending, idleCapH, boxUpgradeInfo, keepable } from '../economy.js';
+import { idlePending, idleCapH, boxUpgradeInfo, keepable, quickAfkCost, AFK_KILLS_H, QUICK_AFK_H } from '../economy.js';
 import { itemIconURL } from '../gfx/gear.js';
 import { catPortraitURL, catFullURL } from '../gfx/cat.js';
 import { sfx } from '../audio.js';
 import { PANELS } from './panels.js';
+import { lazyImg, prewarm } from './lazy.js';
+import { CLASS_BY_ID, canEquip, classesFor } from '../classes.js';
+import { classReveal } from './classui.js';
+import { weekEnd } from '../event.js';
 
 export const RES_LABEL = {
   gold: 'Or', gems: 'Gemmes', yarn: 'Pelotes', feathers: 'Plumes', eggs: 'Paniers', arenaCoins: 'Médailles', warCoins: 'Écussons', speedMin: 'Accélérateur', xp: 'XP',
   stone: 'Pierre de protection', scroll: 'Parchemin de chance', clover: 'Trèfle (butin x2)', milk: 'Lait doré', relicKeys: 'Clés de relique',
-  towerTokens: 'Jetons de défi', frags: 'Fragments d\'artefact',
+  towerTokens: 'Jetons de défi', frags: 'Fragments d\'artefact', guildCoins: 'Écussons de guilde', fest: 'Lanternes de fête',
 };
 export function rarityName(r) { return RARITIES[r].name; }
 export function slotName(id) { return SLOTS.find((s) => s.id === id).name; }
@@ -74,7 +78,7 @@ export class UI {
     this.speedBtn = h('button.ctrl.speed', { onclick: () => g.cycleSpeed() }, 'x1');
     this.challengeBtn = h('button.ctrl.challenge', { onclick: () => g.challenge() }, 'DÉFIER');
     this.autoChBtn = h('button.ctrl.autoch', { onclick: () => g.toggleAutoChallenge() }, 'AUTO');
-    this.idleBtn = h('button.idle-chest', { onclick: () => this.showIdle() }, h('span', { html: icon('chest') }), h('i.idle-fill'), h('b.idle-t'));
+    this.idleBtn = h('button.idle-chest', { onclick: () => this.showIdle(), 'aria-label': 'Récompenses AFK' }, h('span', { html: icon('chest') }), h('i.idle-fill'), h('em.idle-lbl', null, 'AFK'), h('b.idle-t'));
     const ctrls = h('div.ctrls', null, this.idleBtn, this.skillRow, h('div.ctrl-r', null, this.challengeBtn, this.autoChBtn, this.speedBtn));
     this.cutinEl = h('div.cutin', { hidden: true });
     this.bossCard = h('div.boss-card', { hidden: true });
@@ -180,7 +184,7 @@ export class UI {
       for (let i = 0; i < n; i++) w.append(h('i', { cls: i < g.battle.wave ? 'done' : i === g.battle.wave ? 'cur' : '' }));
     }
     this.modeBanner.hidden = !sp;
-    if (sp) this.modeBanner.firstChild.textContent = sp.banner || sp.title;
+    if (sp) { const E = g.battle.enc; const left = E && E.timeLimit ? ` · ⏱ ${Math.max(0, Math.ceil(E.timeLimit - (E.elapsed || 0)))} s` : ''; this.modeBanner.firstChild.textContent = (sp.banner || sp.title) + left; }
   }
   renderGear() {
     const st = this.g.st;
@@ -225,6 +229,9 @@ export class UI {
     const btn = (ic, label, fn, o = {}) => h('button.strip-btn', { onclick: fn, cls: o.cls || '' }, h('span', { html: ic.startsWith('<') ? ic : icon(ic) }), h('b', null, label), o.dot ? h('i.dot') : null, o.timer ? h('small', { dataset: { until: o.timer } }) : null);
     items.push(btn('quest', 'Quêtes', () => this.open('quests'), { dot: g.questsClaimable() }));
     items.push(btn('tower', 'Tour', () => this.open('combat', 'tower'), { dot: st.tower.floor <= 3 }));
+    items.push(btn('guild', 'Guilde', () => this.open('guild'), { dot: g.guildDot(), cls: st.guild.id ? '' : 'glow' }));
+    items.push(btn('fest', 'Festival', () => this.open('event'), { dot: g.eventDot(), cls: 'glow-o', timer: weekEnd() }));
+    items.push(btn('bestiary', 'Bestiaire', () => this.open('bestiary'), { dot: g.bestiaryPending().length > 0 }));
     if (st.iap.firstRecharge !== 2) items.push(btn('gift', st.iap.firstRecharge ? 'Réclamer' : '1er achat', () => this.open('firstRecharge'), { cls: 'glow', dot: st.iap.firstRecharge === 1 }));
     if (st.iap.flash && st.iap.flash.until > Date.now()) items.push(btn('flash', 'Flash', () => g.showProduct(st.iap.flash.id, true), { cls: 'glow-o', timer: st.iap.flash.until }));
     items.push(btn('pass', 'Passe', () => this.open('shop', 'pass'), { dot: g.passClaimable() }));
@@ -248,11 +255,26 @@ export class UI {
     }
   }
 
+  // ---------------------------------------------------------------- images différées
+  kittenImg(id, cls = '') { return lazyImg('k:' + id, () => this.g.kittenURL(id), cls); }
+  costumeImg(id, cls = '') { return lazyImg('c:' + id + ':' + this.g.lookKey(), () => this.g.costumeURL(id), cls); }
+  itemImg(slot, base, r, cls = '') { return lazyImg(`i:${slot}|${base}|${r}`, () => itemIconURL(slot, base, r), cls); }
+  monsterImg(kind, variant = 0, cls = '') { return lazyImg(`m:${kind}:${variant}`, () => monsterPortrait(kind, variant), cls); }
+  lookImg(look, size, cls = '') { return lazyImg('p:' + size + JSON.stringify(look), () => catPortraitURL(look, {}, size), cls); }
+  // remplit le cache en arrière-plan : chatons, costumes, pièces de panoplie, boss
+  prewarmImages() {
+    const g = this.g, st = g.st;
+    // seulement ce que le joueur possède : le reste se dessine à la demande
+    for (const id of st.kittens.equipped) if (id) prewarm('k:' + id, () => g.kittenURL(id));
+    for (const id of Object.keys(st.kittens.owned)) prewarm('k:' + id, () => g.kittenURL(id));
+    for (const id of st.costumes.owned) prewarm('c:' + id + ':' + g.lookKey(), () => g.costumeURL(id));
+  }
+
   // ---------------------------------------------------------------- objets
   itemIcon(it, extra = '') {
     const r = RARITIES[it.r];
-    return h('div.item-ic', { cls: 'r' + it.r + ' ' + extra + (it.relic ? ' relic' : '') + (it.set ? ' set' : ''), style: { '--rc': r.color, '--rd': r.dark } },
-      h('img.ic-img', { src: itemIconURL(it.slot, it.base, it.r), alt: '' }),
+    return h('div.item-ic', { cls: 'r' + it.r + ' ' + extra + (it.relic ? ' relic' : '') + (it.set ? ' set' : '') + (canEquip(this.g.st.hero.cls, it) ? '' : ' nocls'), style: { '--rc': r.color, '--rd': r.dark } },
+      this.itemImg(it.slot, it.base, it.r, 'ic-img'),
       h('b.ilvl', null, 'Nv ' + (it.relic ? Math.max(it.l, this.g.st.hero.lvl) : it.l)),
       it.upg ? h('i.iupg', null, '+' + it.upg) : null,
       it.set ? h('i.iset', { style: { background: SET_BY_ID[it.set].color } }) : null,
@@ -293,19 +315,24 @@ export class UI {
       const d = itemPower(it, st.hero.lvl) - itemPower(cur, st.hero.lvl);
       body.append(h('div.pdiff', { cls: d >= 0 ? 'up' : 'down' }, (d >= 0 ? '▲ +' : '▼ ') + fmt(Math.abs(d)) + ' puissance'));
     }
+    // armes et armures : classes autorisées
+    const okCls = canEquip(st.hero.cls, it);
+    const who = classesFor(it);
+    if (who) body.append(h('div.cls-req', { cls: okCls ? 'ok' : 'ko' }, okCls ? '✔ ' : '✖ ', 'Réservé : ' + who.map((c) => `${c.name} (${c.role})`).join(', ')));
     const btns = [];
     const done = () => { onDone && onDone(); };
+    const equipBtn = okCls ? { label: 'Équiper', cls: 'green', fn: () => { g.equip(it); done(); } } : { label: 'Autre classe', cls: 'gray', disabled: true };
     if (isNew) {
       btns.push({ label: 'Recycler', sub: '+' + fmt(g.recycleValue(it)) + ' or', cls: 'red', fn: () => { g.recycle(it); done(); } });
       btns.push({ label: 'Briser', sub: '+' + g.breakValue(it) + ' runes', cls: 'purple', fn: () => { g.breakNew(it); done(); } });
-      btns.push({ label: 'Équiper', cls: 'green', fn: () => { g.equip(it); done(); } });
+      btns.push(equipBtn);
     } else if (equipped) {
       btns.push({ label: 'Forgemagie', cls: 'purple', fn: () => { this.open('atelier', 'forge'); g.forgeTarget = it.id; this.refresh(); } });
       btns.push({ label: 'Fermer', cls: 'blue' });
     } else {
       if (!it.relic) btns.push({ label: 'Briser', sub: '+' + g.breakValue(it) + ' runes', cls: 'red', fn: () => { g.breakBagItem(it); done(); } });
       btns.push({ label: 'Forger', cls: 'purple', fn: () => { this.open('atelier', 'forge'); g.forgeTarget = it.id; this.refresh(); } });
-      btns.push({ label: 'Équiper', cls: 'green', fn: () => { g.equip(it); done(); } });
+      btns.push(equipBtn);
     }
     this.modal({ title: isNew ? 'Le carton contenait…' : slotName(it.slot), body, buttons: btns, cls: 'r' + it.r + (it.r >= 4 ? ' legendary' : ''), rays: it.r >= 4 ? RARITIES[it.r].color : null, noClose: isNew });
   }
@@ -315,7 +342,8 @@ export class UI {
     sfx('click');
     const P = PANELS[name];
     if (!P) return;
-    this.sheet = { name, tab: tab || (P.tabs ? P.tabs[0][0] : null) };
+    const T = P.tabsFor ? P.tabsFor(this.g) : P.tabs;
+    this.sheet = { name, tab: tab || (T ? T[0][0] : null) };
     for (const k in this.navBtns) this.navBtns[k].classList.toggle('active', k === name);
     this.renderSheet(true);
     this.g.onSheet && this.g.onSheet(name);
@@ -333,9 +361,11 @@ export class UI {
     const P = PANELS[s.name];
     const oldBody = this.sheetEl.querySelector('.sheet-body');
     const scroll = !fresh && oldBody ? oldBody.scrollTop : 0;
+    const T = P.tabsFor ? P.tabsFor(this.g) : P.tabs;
+    if (T && !T.some(([id]) => id === s.tab)) s.tab = T[0][0];
     const content = P.render(this, this.g, s.tab);
     const head = h('div.sheet-head', null, h('b.sheet-title', null, P.title), h('button.icon-btn.close', { onclick: () => this.closeSheet(), 'aria-label': 'Fermer', html: icon('close') }));
-    const tabs = P.tabs ? h('div.tabs', null, P.tabs.map(([id, label]) => h('button.tab', { cls: id === s.tab ? 'on' : '', onclick: () => { sfx('click'); s.tab = id; this.renderSheet(true); } }, label, P.tabDot && P.tabDot(this.g, id) ? h('i.dot') : null))) : null;
+    const tabs = T ? h('div.tabs', null, T.map(([id, label]) => h('button.tab', { cls: id === s.tab ? 'on' : '', onclick: () => { sfx('click'); s.tab = id; this.renderSheet(true); } }, label, P.tabDot && P.tabDot(this.g, id) ? h('i.dot') : null))) : null;
     const body = h('div.sheet-body', null, content);
     this.sheetEl.replaceChildren(head, tabs || '', body);
     this.sheetEl.hidden = false;
@@ -359,10 +389,10 @@ export class UI {
 
   rewardChip(r) {
     const k = r.k;
-    if (k === 'costume') { const c = COSTUME_BY_ID[r.v]; return h('div.rchip.big', { cls: 'r' + c.r }, h('img', { src: this.g.costumeURL(c.id), alt: '' }), h('b', null, c.name), h('small', null, 'Costume')); }
-    if (k === 'kitten') { const kk = KITTEN_BY_ID[r.v]; return h('div.rchip.big', { cls: 'r' + kk.r }, h('img', { src: this.g.kittenURL(kk.id), alt: '' }), h('b', null, kk.name), h('small', null, RARITIES[kk.r].name)); }
+    if (k === 'costume') { const c = COSTUME_BY_ID[r.v]; return h('div.rchip.big', { cls: 'r' + c.r }, this.costumeImg(c.id), h('b', null, c.name), h('small', null, 'Costume')); }
+    if (k === 'kitten') { const kk = KITTEN_BY_ID[r.v]; return h('div.rchip.big', { cls: 'r' + kk.r }, this.kittenImg(kk.id), h('b', null, kk.name), h('small', null, RARITIES[kk.r].name)); }
     if (k === 'skill') { const s = SKILL_BY_ID[r.v]; return h('div.rchip.big', { cls: 'r' + s.r }, h('span.sk-ic', { html: icon('sk_' + s.id) }), h('b', null, s.name), h('small', null, RARITIES[s.r].name)); }
-    if (k === 'relic') { const R = RELIC_BY_ID[r.v]; return h('div.rchip.big', { cls: 'r8' }, h('img', { src: itemIconURL(R.slot, R.base, 8), alt: '' }), h('b', null, R.name), h('small', null, 'Relique')); }
+    if (k === 'relic') { const R = RELIC_BY_ID[r.v]; return h('div.rchip.big', { cls: 'r8' }, this.itemImg(R.slot, R.base, 8), h('b', null, R.name), h('small', null, 'Relique')); }
     if (k === 'look') return h('div.rchip.big', { cls: 'r8' }, h('img', { src: catPortraitURL({ fur: 'galaxie', pattern: 'galaxy', eye: 'galaxie' }, {}, 96), alt: '' }), h('b', null, 'Pelage Galaxie'), h('small', null, 'Apparence'));
     if (k.startsWith('frag:')) { const A = ARTIFACT_BY_ID[k.slice(5)]; return h('div.rchip', { cls: 'r' + A.r }, h('span', { html: this.artIcon(A) }), h('b', null, 'x' + r.v), h('small', null, A.name)); }
     if (k === 'aura') { const A = AURA_BY_ID[r.v]; return h('div.rchip.big', { cls: 'r' + A.r }, h('span.aura-prev', { style: { '--a1': A.colors[0], '--a2': A.colors[1] || A.colors[0] } }), h('b', null, A.name), h('small', null, 'Aura')); }
@@ -388,7 +418,7 @@ export class UI {
   bossIntro(b, variant) {
     const el = this.bossCard;
     el.innerHTML = '';
-    el.append(h('img', { src: monsterPortrait(b.bossKind || b.kind, variant), alt: '' }), h('div', null, h('small', null, { tower: 'GARDIEN DE LA TOUR', lair: 'REPAIRE DE BOSS', dungeon: 'GARDIEN DU DONJON' }[this.g.battle.mode] || 'BOSS DE LA MAP'), h('b', null, b.name), h('em', null, '★★★ Danger')));
+    el.append(this.monsterImg(b.bossKind || b.kind, variant), h('div', null, h('small', null, { tower: 'GARDIEN DE LA TOUR', lair: 'REPAIRE DE BOSS', dungeon: 'GARDIEN DU DONJON', worldboss: 'TITAN DU JOUR' }[this.g.battle.mode] || 'BOSS DE LA MAP'), h('b', null, b.name), h('em', null, '★★★ Danger')));
     el.hidden = false;
     el.classList.remove('play'); void el.offsetWidth; el.classList.add('play');
     clearTimeout(this.bossT);
@@ -449,6 +479,22 @@ export class UI {
     this.stageEl.append(b);
     setTimeout(() => b.remove(), 2000);
   }
+  classReveal(C) { classReveal(this, this.g, C); }
+  // bandeau du coup final de classe (couleur de la classe)
+  classCutin(M) {
+    const C = CLASS_BY_ID[M.cls];
+    if (!C) return;
+    const el = this.cutinEl;
+    el.hidden = false;
+    el.className = 'cutin cls';
+    el.style.setProperty('--rc', C.color);
+    el.innerHTML = '';
+    el.append(h('img', { src: this.g.portrait(), alt: '' }), h('div', null, h('small', null, `${C.name} · ${C.role}`), h('b', null, M.ult.name)));
+    void el.offsetWidth;
+    el.classList.add('play');
+    clearTimeout(this.cutT);
+    this.cutT = setTimeout(() => { el.hidden = true; el.style.removeProperty('--rc'); }, 1100);
+  }
   // cinématique de pouvoir (portrait + nom qui balaie l'écran)
   cutin(sk) {
     const el = this.cutinEl;
@@ -460,6 +506,38 @@ export class UI {
     el.classList.add('play');
     clearTimeout(this.cutT);
     this.cutT = setTimeout(() => { el.hidden = true; }, 1100);
+  }
+  // suspense : le carton tremble et brille à la couleur de la rareté qui arrive
+  boxCharge(r) {
+    const b = this.boxBtn;
+    b.style.setProperty('--burst', RARITIES[r].color);
+    b.classList.remove('charge'); void b.offsetWidth; b.classList.add('charge');
+    setTimeout(() => b.classList.remove('charge'), 820);
+  }
+  // gerbe d'ouverture : particules à la couleur de la rareté ; Légendaire+ : rayons, faisceau, flash, secousse, tampon
+  boxFx(r, relic = false) {
+    const R = RARITIES[r], col = R.color;
+    const layer = h('div.box-fx', { style: { '--c': col } });
+    this.boxBtn.append(layer);
+    const big = r >= 4 || relic;
+    const n = r >= 6 ? 44 : big ? 34 : r >= 2 ? 20 : 12;
+    for (let i = 0; i < n; i++) {
+      const a = -Math.PI * (0.05 + Math.random() * 0.9) + (Math.random() < 0.2 ? Math.PI : 0);
+      const d = 45 + Math.random() * (big ? 150 : 80);
+      layer.append(h('i.bp', { cls: Math.random() < 0.45 ? 'star' : '', style: { '--dx': Math.cos(a) * d + 'px', '--dy': Math.sin(a) * d - 15 + 'px', '--rot': Math.random() * 720 - 360 + 'deg', '--d': 0.45 + Math.random() * 0.5 + 's', '--c': i % 3 === 0 ? '#ffffff' : col } }));
+    }
+    for (let i = 0; i < 5; i++) { const a = Math.PI * (Math.random() < 0.5 ? 0.05 : 0.95) + (Math.random() - 0.5) * 0.4; layer.append(h('i.bp.dust', { style: { '--dx': Math.cos(a) * 60 + 'px', '--dy': -10 + 'px', '--d': '.6s' } })); }
+    layer.append(h('i.box-ring'));
+    if (r >= 3) layer.append(h('i.box-ring', { style: { animationDelay: '.12s' } }));
+    if (big) {
+      layer.append(h('i.box-rays'), h('i.box-beam'));
+      const fl = h('div.screen-flash', { style: { '--c': col } });
+      const stamp = h('div.rar-stamp', { style: { '--c': col } }, relic ? 'RELIQUE !' : R.name.toUpperCase() + ' !', h('small', null, relic ? '1 chance sur 200 000' : r >= 6 ? 'INCROYABLE' : 'SUPERBE'));
+      this.app.append(fl, stamp);
+      this.app.classList.remove('quake'); void this.app.offsetWidth; this.app.classList.add('quake');
+      setTimeout(() => { fl.remove(); stamp.remove(); this.app.classList.remove('quake'); }, 1350);
+    }
+    setTimeout(() => layer.remove(), 1500);
   }
   boxShake(r = 0) {
     const b = this.boxBtn;
@@ -473,16 +551,37 @@ export class UI {
     const p = idlePending(st, g.stats);
     const cap = idleCapH(st);
     const rate = g.idleRate();
+    const left = g.quickAfkLeft(), qn = st.daily.quickAfk || 0, qcost = quickAfkCost(qn);
+    const kills = Math.min(800, Math.floor(p.hours * AFK_KILLS_H));
     const body = h('div.idle-pop', null,
-      h('div.idle-hero', { html: icon('chest') }),
-      h('p', null, `Vos chats ont patrouillé ${fmtTime(p.hours * 3600)} (max ${cap} h).`),
-      h('div.rewards', null, this.rewardChip({ k: 'gold', v: p.gold }), this.rewardChip({ k: 'yarn', v: p.yarn })),
-      h('p.muted', null, `Revenus : ${fmt(rate.gold)} or/h · ${fmt(rate.yarn)} pelotes/h`),
+      h('div.afk-bar', null, h('i', { style: { transform: `scaleX(${Math.min(1, p.hours / cap)})` } }), h('b', null, `${fmtTime(p.hours * 3600)} / ${cap} h`)),
+      h('p', null, p.hours >= cap ? 'Coffre AFK plein : récoltez-le pour que vos chats repartent en patrouille !' : 'Vos chats combattent même quand vous n\'êtes pas là.'),
+      h('div.rewards', null, this.rewardChip({ k: 'gold', v: p.gold }), this.rewardChip({ k: 'yarn', v: p.yarn }), this.rewardChip({ k: 'xp', v: Math.floor(p.hours * (15 + st.hero.lvl * 0.6)) })),
+      h('p.small.muted', null, `+ le butin d'environ ${kills} ennemis de votre map · ${fmt(rate.gold)} or/h · plafond ${cap} h (plus avec le VIP)`),
+      h('div.afk-quick', null,
+        h('div.grow', null, h('b', null, `Patrouille éclair : ${QUICK_AFK_H} h de butin tout de suite`), h('small.muted', null, `${left} restante(s) aujourd'hui`)),
+        h('button.btn.sm', { cls: left > 0 ? (qcost ? 'purple' : 'gold') : 'gray', disabled: left <= 0, onclick: () => { g.quickAfk(); } }, h('span', null, qcost ? 'Lancer' : 'Gratuit'), qcost ? h('small', { html: icon('gems') + ' ' + qcost }) : null)),
+      h('button.btn.blue.wide', { onclick: () => g.startAfkMode() }, h('span', null, 'Mode AFK (écran économie d\'énergie)'), h('small', null, `Vos chats progressent seuls · ${Math.round(g.afkSessionMax() / 3600)} h max par session`)),
     );
-    this.modal({ title: 'Butin de patrouille', body, buttons: [
+    this.modal({ title: 'Récompenses AFK', body, buttons: [
       { label: 'Récolter', cls: 'green', disabled: p.gold <= 0, fn: () => g.claimIdle(1) },
-      { label: 'x2 Vidéo', sub: 'Bonus', cls: 'purple', disabled: p.gold <= 0, fn: () => { g.watchAd(() => g.claimIdle(2)); } },
+      { label: 'x2 Vidéo', sub: 'Or et pelotes', cls: 'purple', disabled: p.gold <= 0, fn: () => { g.watchAd(() => g.claimIdle(2)); } },
     ] });
+  }
+  // écran du mode AFK
+  afkOverlay(on) {
+    if (!on) { if (this.afkEl) { this.afkEl.remove(); this.afkEl = null; } return; }
+    this.afkEl = h('div.afk-mode', { onclick: () => this.g.stopAfkMode(false) },
+      h('div.afk-card', null, h('small', null, 'MODE AFK'), h('b.afk-time', null, '0:00'), h('div.afk-stats'), h('p.small', null, 'Vos chats combattent et progressent seuls. Touchez l\'écran pour revenir.'), h('div.afk-limit')));
+    this.app.append(this.afkEl);
+  }
+  afkTick(a, g) {
+    if (!this.afkEl || (a.frame % 15)) return;
+    const el = this.afkEl;
+    el.querySelector('.afk-time').textContent = fmtTime(a.t);
+    const st = g.st;
+    el.querySelector('.afk-stats').textContent = `Map ${st.camp.ch}-${st.camp.st} · ${st.stats.kills - a.kills} ennemis · +${fmt(Math.max(0, st.res.gold - a.gold))} or`;
+    el.querySelector('.afk-limit').textContent = `Fin de session dans ${fmtTime(Math.max(0, g.afkSessionMax() - a.t))}`;
   }
   showBoxUpgrade() {
     const g = this.g, st = g.st;
@@ -512,6 +611,9 @@ export class UI {
   placeTuto() {
     const el = this.tutoEl, t = this.tutoTarget;
     if (!t || !t.isConnected || t.offsetParent === null || this.modalRoot.children.length) { el.hidden = true; return; }
+    // cible cachée derrière un panneau ouvert (ex. le carton) : pas d'anneau
+    if (this.sheet && !this.nav.contains(t) && !this.sheetEl.contains(t)) { el.hidden = true; return; }
+    if (this.app.querySelector('.cls-reveal')) { el.hidden = true; return; }
     const r = t.getBoundingClientRect(), b = this.app.getBoundingClientRect();
     if (r.width === 0) { el.hidden = true; return; }
     el.hidden = false;

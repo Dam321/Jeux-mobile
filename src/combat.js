@@ -41,37 +41,62 @@ export const equippedPets = equippedKittens;
 
 // Simulation rapide (sans visuel) d'un combat : joueur vs vagues d'ennemis.
 // enemies : [[{hp,atk,def,interval,boss}...], ...]
-export function quickFight(P, skills, pets, waves, timeLimit = 90) {
+// M : mécaniques de classe (classes.js → classMech) ou null (coup final générique x2,5 toutes les 5 attaques)
+export function quickFight(P, skills, pets, waves, timeLimit = 90, M = null) {
   let hp = P.hp, shield = 0, t = 0;
   const dt = 0.05;
   const interval = attackInterval(P);
-  let atkT = 0;
+  let atkT = 0, atkN = 0, souls = 0, shT = M && M.shieldEvery ? M.shieldEvery - 1 : 0;
   const cds = skills.map((s) => s.cd * 0.5);
   const petT = pets.map(() => 1);
+  const cdr = 1 + ((M && M.cdr) || 0) / 100;
+  const every = M ? M.ultEvery : 5;
   let buff = 0, buffT = 0;
   for (const wave of waves) {
     const es = wave.map((e) => ({ ...e, cur: e.hp, t: e.interval * (0.6 + Math.random() * 0.6), stun: 0 }));
     const alive = () => es.filter((e) => e.cur > 0);
-    const hit = (e, mult, skill) => {
+    const hit = (e, mult, skill, basic) => {
+      if (!e || e.cur <= 0) return;
+      let m = mult;
       const a = { ...P, atk: P.atk * (1 + buff) };
-      const r = rollAttack(a, e, mult * (skill ? 1 + P.skillDmg / 100 : 1), e.boss);
+      if (M) {
+        if (M.rage) m *= 1 + (M.rage / 100) * (1 - hp / P.hp);
+        if (M.soulAtk) m *= 1 + (souls * M.soulAtk) / 100;
+        if (basic && M.firstCrit && !e.hit1) { e.hit1 = true; a.crit = 100; }
+      }
+      if (e.curse) m *= 1 + (e.curse * M.curse) / 100;
+      const r = rollAttack(a, e, m * (skill ? 1 + P.skillDmg / 100 : 1), e.boss);
       e.cur -= r.dmg;
-      if (!skill) hp = Math.min(P.hp, hp + r.dmg * P.lifesteal / 100);
-      if (!skill && Math.random() * 100 < P.stun) e.stun = 1.2;
+      if (basic) hp = Math.min(P.hp, hp + r.dmg * P.lifesteal / 100);
+      if (basic && Math.random() * 100 < P.stun) e.stun = 1.2;
+      if (basic && M && e.cur > 0) {
+        if (M.curse) e.curse = Math.min(M.curseMax, (e.curse || 0) + 1);
+        if (M.poison) { e.poison = Math.min(M.poisonMax, (e.poison || 0) + 1); e.poisonT = M.poisonDur; e.pdps = hitDamage(P.atk, e.def) * M.poison; }
+        if (M.execute && !e.boss && e.cur < e.hp * M.execute) e.cur = 0;
+      }
+      if (e.cur <= 0 && !e.gone) { e.gone = true; if (M && M.soulHeal) { souls = Math.min(M.soulMax, souls + 1); hp = Math.min(P.hp, hp + P.hp * M.soulHeal); } }
     };
     while (alive().length) {
       t += dt;
       if (t > timeLimit) return { win: false, t, hpLeft: hp / P.hp };
       if (buffT > 0) { buffT -= dt; if (buffT <= 0) buff = 0; }
+      if (M && M.shieldEvery) { shT += dt; if (shT >= M.shieldEvery) { shT = 0; shield = P.hp * M.shieldPct; } }
       atkT += dt;
       if (atkT >= interval) {
         atkT -= interval;
+        atkN++;
         const tg = alive()[0];
-        hit(tg, 1);
-        if (Math.random() * 100 < P.combo && tg.cur > 0) hit(tg, 1);
+        if (atkN % every === 0) {
+          if (M) { const ult = M.ult; for (const e of ult.aoe ? alive() : [tg]) hit(e, ult.mult, false, true); if (ult.heal) hp = Math.min(P.hp, hp + P.hp * ult.heal); }
+          else hit(tg, 2.5, false, true);
+        } else {
+          hit(tg, 1, false, true);
+          if (M && M.multishot) hit(alive().find((e) => e !== tg), M.multishot, false, true);
+        }
+        if (Math.random() * 100 < P.combo && tg.cur > 0) hit(tg, 1, false, true);
       }
       for (let i = 0; i < skills.length; i++) {
-        cds[i] -= dt;
+        cds[i] -= dt * cdr;
         if (cds[i] <= 0) {
           const s = skills[i];
           cds[i] = s.cd;
@@ -85,14 +110,16 @@ export function quickFight(P, skills, pets, waves, timeLimit = 90) {
       }
       for (let i = 0; i < pets.length; i++) {
         petT[i] -= dt;
-        if (petT[i] <= 0) { petT[i] = 2.2; const tg = alive()[0]; if (tg) hit(tg, pets[i].mult * pets[i].lm, true); }
+        if (petT[i] <= 0) { petT[i] = 2.2; const tg = alive()[0]; if (tg) hit(tg, pets[i].mult * pets[i].lm * (1 + (P.kitDmg || 0) / 100), true); }
       }
       for (const e of alive()) {
+        if (e.poison) { e.cur -= e.pdps * e.poison * dt; e.poisonT -= dt; if (e.poisonT <= 0) e.poison = 0; if (e.cur <= 0) { hit(e, 0, false, false); continue; } }
         if (e.stun > 0) { e.stun -= dt; continue; }
         e.t -= dt;
         if (e.t <= 0) {
           e.t = e.interval;
           if (Math.random() * 100 < P.dodge) continue;
+          if (M && M.parry && Math.random() * 100 < M.parry) { hit(e, 1); continue; }
           let d = hitDamage(e.atk, P.def) * (0.92 + Math.random() * 0.16);
           if (shield > 0) { const a = Math.min(shield, d); shield -= a; d -= a; }
           hp -= d;

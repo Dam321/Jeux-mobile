@@ -66,6 +66,8 @@ export const AURAS = [
   { id: 'rainbow', name: 'Arc-en-ciel', r: 6, colors: ['#ff4d5e', '#ffd23f', '#62d86b', '#48f3ff', '#b968ff'], shape: 'glow', motion: 'ring', atk: 6 },
   { id: 'galaxy', name: 'Galaxie', r: 7, colors: ['#c77dff', '#ff7ae0', '#ffffff'], shape: 'star', motion: 'spiral', atk: 8 },
   { id: 'divine', name: 'Lumière divine', r: 7, colors: ['#fff2a0', '#ffffff'], shape: 'star', motion: 'pillar', atk: 8 },
+  { id: 'banner', name: 'Étendard de guilde', r: 6, colors: ['#ffcc33', '#ff4d5e', '#4aa9ff'], shape: 'star', motion: 'ring', atk: 5 },
+  { id: 'lantern', name: 'Lanternes du Festival', r: 7, colors: ['#ff4d5e', '#ffd23f', '#fff27a'], shape: 'glow', motion: 'rise', atk: 6 },
   { id: 'origin', name: 'Aura des Origines', r: 8, colors: ['#ff4d5e', '#ffd23f', '#62d86b', '#48f3ff', '#ff7ae0'], shape: 'star', motion: 'spiral', atk: 12 },
 ];
 export const AURA_BY_ID = Object.fromEntries(AURAS.map((a) => [a.id, a]));
@@ -74,6 +76,9 @@ export const TITLES = [
   { id: 'claw', name: 'Griffe d\'acier', r: 2, hp: 1, src: 'Étape 3-1' },
   { id: 'ratHunter', name: 'Chasseur de rats', r: 2, hp: 1, src: '1 000 ennemis vaincus' },
   { id: 'climber', name: 'Grimpeur', r: 3, hp: 2, src: 'Tour des Défis étage 25' },
+  { id: 'partyKing', name: 'Roi de la Fête', r: 6, hp: 5, src: 'Dernier palier du Festival' },
+  { id: 'towerMaster', name: 'Maître de la Tour', r: 7, hp: 6, src: 'N°1 du classement de la Tour' },
+  { id: 'bossSlayer', name: 'Fléau des Boss', r: 5, hp: 4, src: 'Top 3 du Boss mondial' },
   { id: 'artisan', name: 'Maître artisan', r: 3, hp: 2, src: 'Artisan niveau 20' },
   { id: 'forgemage', name: 'Forgemage', r: 4, hp: 3, src: 'Un objet à +10' },
   { id: 'tamer', name: 'Dompteur de chatons', r: 4, hp: 3, src: '25 chatons différents' },
@@ -99,6 +104,8 @@ export const FRAMES = [
   { id: 'flames', name: 'Flammes', r: 6, luck: 7, src: 'Récompense de fidélité' },
   { id: 'rainbow', name: 'Arc-en-ciel', r: 7, luck: 8, src: 'Tour étage 150' },
   { id: 'cosmic', name: 'Cosmique', r: 8, luck: 10, src: 'Récompense de fidélité' },
+  { id: 'blazon', name: 'Blason', r: 6, luck: 6, src: 'Boutique de guilde' },
+  { id: 'festival', name: 'Festival', r: 7, luck: 7, src: 'Événement de la semaine' },
 ];
 export const FRAME_BY_ID = Object.fromEntries(FRAMES.map((f) => [f.id, f]));
 // Boutique de style (gemmes)

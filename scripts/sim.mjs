@@ -1,18 +1,20 @@
-// Simulateur d'équilibrage v2 : gratuit vs petit payeur vs baleine sur 30 jours
+// Simulateur d'équilibrage v4 : gratuit vs petit payeur vs baleine sur 30 jours
 import { defaultState } from '../src/state.js';
 import { computeStats } from '../src/stats.js';
 import { openBoxes, summonSkills, summonKittens, train, grant, idleRate, levelUp, rollDrops, craft, forge, craftCheck } from '../src/economy.js';
 import { quickFight, equippedSkills, equippedKittens } from '../src/combat.js';
-import { campaignWaves } from '../src/encounters.js';
+import { campaignWaves, mapClearReward } from '../src/encounters.js';
 import { boxUpgradeGold, boxUpgradeSeconds, BOX_MAX_LEVEL, VIP_PERKS, vipLevel, PRODUCTS, trainingCost, dungeonReward, ACHIEVEMENTS, FIRST_RECHARGE } from '../src/config.js';
 import { SETS } from '../src/content.js';
+import { classMech, SPEC_LEVEL } from '../src/classes.js';
+import { pathToFileURL } from 'url';
 
 function fightStage(st, s) {
   const S = computeStats(st);
   const v = VIP_PERKS[vipLevel(st.iap.vip)];
   const ch = Math.floor(s / 10) + 1, stg = (s % 10) + 1;
   let wins = 0;
-  for (let i = 0; i < 3; i++) if (quickFight(S, equippedSkills(st, v.skillSlots), equippedKittens(st, v.kittenSlots), campaignWaves(ch, stg).waves).win) wins++;
+  for (let i = 0; i < 3; i++) if (quickFight(S, equippedSkills(st, v.skillSlots), equippedKittens(st, v.kittenSlots), campaignWaves(ch, stg).waves, 90, classMech(st.hero.cls, st.hero.spec)).win) wins++;
   return wins >= 2;
 }
 function buy(st, id) {
@@ -24,8 +26,10 @@ function buy(st, id) {
   if (id === 'monthly') { st.iap.monthlyUntil = Date.now() + 30 * 864e5; st.res.gems += 300; }
   if (!st.iap.firstRecharge) { st.iap.firstRecharge = 2; grant(st, FIRST_RECHARGE); }
 }
-function run(profile, days = 30) {
+export function run(profile, days = 30, cls = 'botte', spec = 'duel', out = {}) {
   const st = defaultState();
+  st.hero.cls = cls;
+  out.st = st;
   let boxTimer = 0;
   const log = [];
   const ach = new Set();
@@ -84,16 +88,21 @@ function run(profile, days = 30) {
       // butin : ~10 ennemis par étape (1 boss toutes les 10)
       const kinds = campaignWaves(Math.floor(s / 10) + 1, (s % 10) + 1).waves.flat();
       for (const e of kinds) rollDrops(st, e.kind, e.boss, e.drop, 1);
+      if (s % 10 === 9) { const r = mapClearReward(Math.floor(s / 10) + 1); st.res.gems += r.gems; st.res.eggs += r.eggs; st.res.feathers += r.feathers; }
       s++;
     }
     // farm quotidien (~2 h de combats répétés sur la dernière étape)
     for (let k = 0; k < 250; k++) { const e = campaignWaves(Math.floor(Math.max(0, s - 1) / 10) + 1, (Math.max(0, s - 1) % 10) + 1).waves.flat(); for (const x of e) rollDrops(st, x.kind, x.boss, x.drop, 1); }
     st.camp.best = s;
     for (const k in ACHIEVEMENTS) { const a = ACHIEVEMENTS[k]; if (!ach.has(a.id) && ((a.kind === 'stage' && s >= a.goal) || (a.kind === 'level' && st.hero.lvl >= a.goal) || (a.kind === 'opens' && st.stats.opens >= a.goal))) { ach.add(a.id); st.res.gems += a.gems; } }
+    if (!st.hero.spec && st.hero.lvl >= SPEC_LEVEL) st.hero.spec = spec;
     const S = computeStats(st);
     const sets = Object.values(st.gear).filter((x) => x && x.set).length;
     if ([1, 2, 3, 5, 7, 10, 14, 20, 30].includes(d)) log.push({ d, stage: `${Math.floor(s / 10) + 1}-${(s % 10) + 1}`, lvl: st.hero.lvl, box: st.box.lvl, power: S.power.toExponential(2), vip: vipLevel(st.iap.vip), spent: (st.iap.spent / 100).toFixed(0) + '€', kittens: Object.keys(st.kittens.owned).length, setPieces: sets, crafts: st.stats.crafts, relics: Object.values(st.gear).filter((x) => x && x.relic).length + st.bag.filter((x) => x.relic).length });
   }
   return log;
 }
-const ONLY = process.argv[2]; for (const p of ['f2p', 'dolphin', 'whale']) { if (ONLY && p !== ONLY) continue; console.log('=== ' + p); console.table(run(p)); }
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const ONLY = process.argv[2];
+  for (const p of ['f2p', 'dolphin', 'whale']) { if (ONLY && p !== ONLY) continue; console.log('=== ' + p); console.table(run(p)); }
+}

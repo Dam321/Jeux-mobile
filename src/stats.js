@@ -5,6 +5,10 @@ import {
 import {
   KITTEN_BY_ID, KITTEN_EQUIP_ATK, KITTEN_OWN_HP, KITTEN_BONUS_VAL, kittenLevelMult, COSTUMES as COSTUMES2, SET_BY_ID, RELIC_BY_ID, FORGE_BONUS,
 } from './content.js';
+import { classOf, specOf } from './classes.js';
+import { guildFx } from './guild.js';
+import { bestiaryTotal, BESTIARY_PCT } from './event.js';
+import { ALL_BOSSES } from './content.js';
 import { COSTUMES3, ARTIFACT_BY_ID, artifactBonus, artifactSlots, AURA_BY_ID, TITLE_BY_ID, FRAME_BY_ID } from './content3.js';
 const COSTUMES = [...COSTUMES2, ...COSTUMES3];
 const COSTUME_BY_ID = Object.fromEntries(COSTUMES.map((c) => [c.id, c]));
@@ -97,6 +101,18 @@ export function computeStats(st) {
     const S = SET_BY_ID[id];
     for (const n in S.bonus) if (sc[id] >= +n) { addFx(S.bonus[n]); setBonus.push({ id, n: +n }); }
   }
+  // arbre de guilde (actif seulement en guilde)
+  addFx(guildFx(st));
+  // bestiaire : chaque palier de chasse atteint compte pour toujours
+  const bt = bestiaryTotal(st, (k) => ALL_BOSSES.includes(k));
+  atkPct += bt * BESTIARY_PCT; hpPct += bt * BESTIARY_PCT;
+  // classe et spécialisation
+  const C = classOf(st), SP = specOf(st);
+  for (const fx of [C && C.base, SP && SP.fx]) {
+    if (!fx) continue;
+    if (fx.def) defPct += fx.def;
+    addFx(Object.fromEntries(Object.entries(fx).filter(([k]) => k !== 'def')));
+  }
   atkPct += st.train.atk * 2;
   hpPct += st.train.hp * 2;
   defPct += st.train.def * 2;
@@ -158,7 +174,7 @@ export function computeStats(st) {
   def *= 1 + defPct / 100;
   for (const k of SUBSTAT_KEYS) sub[k] = Math.min(sub[k], SUBSTATS[k].cap);
 
-  const out = { atk, hp, def, ...sub, atkPct, hpPct, goldPct, kitDmg, vip, perks: perksOn, setBonus };
+  const out = { atk, hp, def, ...sub, atkPct, hpPct, goldPct, kitDmg, vip, perks: perksOn, setBonus, cls: C ? C.id : null, spec: SP ? SP.id : null };
   out.power = powerOf(out);
   return out;
 }
