@@ -1,0 +1,8 @@
+{
+  "appId": "com.miaouempire.game",
+  "appName": "Miaou Empire",
+  "webDir": "dist",
+  "backgroundColor": "#170d33",
+  "android": { "allowMixedContent": false },
+  "ios": { "contentInset": "never" }
+}
