@@ -84,7 +84,7 @@ export class Battle {
   makeEnemy(d, i, n) {
     const boss = d.boss, elite = d.elite;
     const kind = boss && d.bossKind ? d.bossKind : d.kind;
-    const sc = MOB_SCALE * (elite ? 1.22 : 1) * (d.giant ? 1.5 : 1);
+    const sc = MOB_SCALE * (boss ? 0.88 : 1) * (elite ? 1.22 : 1) * (d.giant ? 1.5 : 1); // boss un peu réduits : ils ne montent plus dans le HUD
     const hx = this.heroX();
     const slotX = boss && n <= 2 && i === 0 ? hx + 120 : hx + 74 + i * 30;
     const info = monsterInfo(kind);
@@ -367,7 +367,7 @@ export class Battle {
     const tx = o.x + k.ox * o.facing, ty = GROUND_Y + k.oy;
     k.x += (tx - k.x) * Math.min(1, dt * 4);
     k.y += (ty - k.y) * Math.min(1, dt * 4);
-    k.anim = o.anim === 'run' ? 'run' : k.anim === 'attack' ? 'attack' : 'idle';
+    k.anim = o.anim === 'run' ? 'run' : k.anim === 'attack' ? 'attack' : o.anim === 'victory' ? 'victory' : 'idle';
     if (o.dead || this.phase !== 'fight') return;
     const foes = this.foes(o);
     if (!foes.length) return;
@@ -475,7 +475,7 @@ export class Battle {
       }
       case 'victory':
         if (this.phaseT === dt) this.fx.burst(H.x, H.y - 150, { count: 30, color: ['#ffd23f', '#ffffff', '#ff7ae0'], speed: 160, up: 100, size: 9, life: 1, shape: 'star', gravity: 200 });
-        H.anim = H.anim === 'attack' ? H.anim : 'idle';
+        H.anim = H.anim === 'attack' ? H.anim : 'victory'; // pose de victoire (si le dessin la connaît, sinon repos)
         if (this.phaseT > 1) { this.setPhase('idle'); this.game.onEncounterEnd(true, this.enc); }
         break;
       case 'defeat':

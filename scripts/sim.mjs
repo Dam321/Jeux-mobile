@@ -7,6 +7,7 @@ import { campaignWaves, mapClearReward } from '../src/encounters.js';
 import { boxUpgradeGold, boxUpgradeSeconds, BOX_MAX_LEVEL, VIP_PERKS, vipLevel, PRODUCTS, trainingCost, dungeonReward, ACHIEVEMENTS, FIRST_RECHARGE } from '../src/config.js';
 import { SETS } from '../src/content.js';
 import { classMech, SPEC_LEVEL } from '../src/classes.js';
+import { altarCost } from '../src/altar.js';
 import { pathToFileURL } from 'url';
 
 function fightStage(st, s) {
@@ -68,6 +69,9 @@ export function run(profile, days = 30, cls = 'botte', spec = 'duel', out = {}) 
       }
       secsToday -= boxTimer; boxTimer = 0; st.box.lvl++;
     }
+    // Autel de Bastet : une part des gemmes part en offrandes (niveaux infinis, coût +7,5 %/niveau)
+    let altarBudget = st.res.gems * ({ whale: 0.3, dolphin: 0.15, f2p: 0.1 }[profile] || 0);
+    while (altarBudget >= altarCost(st.altar.lvl)) { const c = altarCost(st.altar.lvl); altarBudget -= c; st.res.gems -= c; st.altar.lvl++; }
     while (st.res.gems >= 900) { st.res.gems -= 900; st.res.feathers += 10; if (st.res.gems >= 700) { st.res.gems -= 700; st.res.eggs += 10; } if (st.res.gems >= 1100) { st.res.gems -= 1100; st.res.yarn += 2500; } }
     while (st.res.yarn > 0) openBoxes(st, Math.min(st.res.yarn, 1000), true);
     if (st.res.feathers >= 1) { summonSkills(st, Math.floor(st.res.feathers)); st.res.feathers = 0; }
@@ -98,7 +102,7 @@ export function run(profile, days = 30, cls = 'botte', spec = 'duel', out = {}) 
     if (!st.hero.spec && st.hero.lvl >= SPEC_LEVEL) st.hero.spec = spec;
     const S = computeStats(st);
     const sets = Object.values(st.gear).filter((x) => x && x.set).length;
-    if ([1, 2, 3, 5, 7, 10, 14, 20, 30].includes(d)) log.push({ d, stage: `${Math.floor(s / 10) + 1}-${(s % 10) + 1}`, lvl: st.hero.lvl, box: st.box.lvl, power: S.power.toExponential(2), vip: vipLevel(st.iap.vip), spent: (st.iap.spent / 100).toFixed(0) + '€', kittens: Object.keys(st.kittens.owned).length, setPieces: sets, crafts: st.stats.crafts, relics: Object.values(st.gear).filter((x) => x && x.relic).length + st.bag.filter((x) => x.relic).length });
+    if ([1, 2, 3, 5, 7, 10, 14, 20, 30].includes(d)) log.push({ d, stage: `${Math.floor(s / 10) + 1}-${(s % 10) + 1}`, lvl: st.hero.lvl, box: st.box.lvl, power: S.power.toExponential(2), autel: st.altar.lvl, vip: vipLevel(st.iap.vip), spent: (st.iap.spent / 100).toFixed(0) + '€', kittens: Object.keys(st.kittens.owned).length, setPieces: sets, crafts: st.stats.crafts, relics: Object.values(st.gear).filter((x) => x && x.relic).length + st.bag.filter((x) => x.relic).length });
   }
   return log;
 }

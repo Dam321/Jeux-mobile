@@ -12,6 +12,7 @@ import { catPortraitURL, catFullURL } from '../gfx/cat.js';
 import { sfx } from '../audio.js';
 import { PANELS } from './panels.js';
 import { lazyImg, prewarm } from './lazy.js';
+import { BOX_TIERS, boxTier, boxSVG } from '../gfx/boxart.js';
 import { CLASS_BY_ID, canEquip, classesFor } from '../classes.js';
 import { classReveal } from './classui.js';
 import { weekEnd } from '../event.js';
@@ -81,11 +82,10 @@ export class UI {
     this.idleBtn = h('button.idle-chest', { onclick: () => this.showIdle(), 'aria-label': 'Récompenses AFK' }, h('span', { html: icon('chest') }), h('i.idle-fill'), h('em.idle-lbl', null, 'AFK'), h('b.idle-t'));
     const ctrls = h('div.ctrls', null, this.idleBtn, this.skillRow, h('div.ctrl-r', null, this.challengeBtn, this.autoChBtn, this.speedBtn));
     this.cutinEl = h('div.cutin', { hidden: true });
-    this.bossCard = h('div.boss-card', { hidden: true });
     this.tutoEl = h('div.tuto', { hidden: true }, h('i.tuto-ring'), h('b.tuto-txt'));
     // v3 : tout ce qui s'affiche en combat s'empile dans le HUD (plus rien ne masque les combattants)
     hud.append(this.strip, this.modeBanner, this.stageInfo, this.bossBar, this.lootFeed);
-    this.stageEl.append(hud, ctrls, this.cutinEl, this.bossCard);
+    this.stageEl.append(hud, ctrls, this.cutinEl);
 
     this.home = h('div.home');
     this.gearL = h('div.gear-col');
@@ -103,9 +103,10 @@ export class UI {
     }
     this.sheetEl = h('div.sheet', { hidden: true });
     this.modalRoot = h('div.modal-root');
-    this.toasts = h('div.toasts');
+    this.toasts = h('div.toasts'); // messages système : tout en haut, compacts, 2 au maximum
+    this.lane = h('div.ann-lane'); // bannières d'étape : juste sous le HUD
     this.flyLayer = h('div.fly-layer');
-    app.append(this.stageEl, this.home, this.sheetEl, this.nav, this.modalRoot, this.toasts, this.flyLayer, this.tutoEl);
+    app.append(this.stageEl, this.home, this.sheetEl, this.nav, this.modalRoot, this.lane, this.toasts, this.flyLayer, this.tutoEl);
   }
 
   buildBox() {
@@ -116,7 +117,7 @@ export class UI {
     this.autoBtn = h('button.box-side.auto', { onclick: () => g.toggleAutoBox() }, h('small', null, 'Auto'), h('b', null, 'OFF'));
     this.yarnCount = h('b.yarn-count', null, '0');
     this.boxBtn = h('button.box-btn', { 'aria-label': 'Ouvrir le carton', onclick: () => g.openBoxClick() },
-      h('div.box-glow'), h('div.box-svg', { html: BOX_SVG }), h('div.box-yarn', null, h('span', { html: icon('yarn') }), this.yarnCount));
+      h('div.box-glow'), h('div.box-svg', { html: boxSVG(boxTier(this.g.st.box.lvl)) }), h('div.box-yarn', null, h('span', { html: icon('yarn') }), this.yarnCount));
     return h('div.box-area', null, this.boxBtn, h('div.box-meta', null, this.batchBtn, h('div.box-lvlwrap', null, this.boxLvl, this.boxUpBtn), this.autoBtn));
   }
 
@@ -151,7 +152,8 @@ export class UI {
     this.boxUpBtn.classList.toggle('busy', !!up.busy);
     this.boxUpBtn.classList.toggle('done', !!up.busy && up.left <= 0);
     this.boxBtn.classList.toggle('empty', st.res.yarn <= 0);
-    this.boxArea.dataset.tier = Math.min(8, Math.floor((st.box.lvl - 1) / 4));
+    const tier = boxTier(st.box.lvl);
+    if (this.boxArea.dataset.tier !== String(tier)) { this.boxArea.dataset.tier = tier; this.boxBtn.querySelector('.box-svg').innerHTML = boxSVG(tier); this.boxBtn.title = BOX_TIERS[tier].name; }
     this.setText('batch', this.batchBtn.lastChild, 'x' + g.batchSize());
     this.setText('auto', this.autoBtn.lastChild, g.autoBox ? 'ON' : 'OFF');
     this.autoBtn.classList.toggle('on', g.autoBox);
@@ -168,6 +170,7 @@ export class UI {
     this.autoChBtn.classList.toggle('on', st.camp.auto);
     this.setText('chal', this.challengeBtn, g.nextIsBoss() ? 'DÉFIER LE BOSS' : 'DÉFIER');
     this.placeTuto();
+    this.placeLane();
   }
   updateStageInfo() {
     const g = this.g, st = g.st;
@@ -232,6 +235,7 @@ export class UI {
     items.push(btn('guild', 'Guilde', () => this.open('guild'), { dot: g.guildDot(), cls: st.guild.id ? '' : 'glow' }));
     items.push(btn('fest', 'Festival', () => this.open('event'), { dot: g.eventDot(), cls: 'glow-o', timer: weekEnd() }));
     items.push(btn('bestiary', 'Bestiaire', () => this.open('bestiary'), { dot: g.bestiaryPending().length > 0 }));
+    items.push(btn('altar', 'Autel', () => this.open('altar'), { cls: 'glow' }));
     if (st.iap.firstRecharge !== 2) items.push(btn('gift', st.iap.firstRecharge ? 'Réclamer' : '1er achat', () => this.open('firstRecharge'), { cls: 'glow', dot: st.iap.firstRecharge === 1 }));
     if (st.iap.flash && st.iap.flash.until > Date.now()) items.push(btn('flash', 'Flash', () => g.showProduct(st.iap.flash.id, true), { cls: 'glow-o', timer: st.iap.flash.until }));
     items.push(btn('pass', 'Passe', () => this.open('shop', 'pass'), { dot: g.passClaimable() }));
@@ -416,13 +420,16 @@ export class UI {
     return `<i class="ic res-ic art-ic r${A.r}" style="color:${A.color}">${icon('r_' + A.shape).replace(/^<i class="ic ">|<\/i>$/g, '')}</i>`;
   }
   bossIntro(b, variant) {
-    const el = this.bossCard;
-    el.innerHTML = '';
-    el.append(this.monsterImg(b.bossKind || b.kind, variant), h('div', null, h('small', null, { tower: 'GARDIEN DE LA TOUR', lair: 'REPAIRE DE BOSS', dungeon: 'GARDIEN DU DONJON', worldboss: 'TITAN DU JOUR' }[this.g.battle.mode] || 'BOSS DE LA MAP'), h('b', null, b.name), h('em', null, '★★★ Danger')));
-    el.hidden = false;
-    el.classList.remove('play'); void el.offsetWidth; el.classList.add('play');
-    clearTimeout(this.bossT);
-    this.bossT = setTimeout(() => { el.hidden = true; }, 2200);
+    // l'intro se fait dans la barre de boss (en haut) : portrait, titre et entrée animée
+    const bb = this.bossBar;
+    const label = { tower: 'GARDIEN DE LA TOUR', lair: 'REPAIRE DE BOSS', dungeon: 'GARDIEN DU DONJON', worldboss: 'TITAN DU JOUR', guildboss: 'GARDIEN DE GUILDE' }[this.g.battle.mode] || 'BOSS DE LA MAP';
+    let pic = bb.querySelector('.bportrait');
+    if (!pic) { pic = h('span.bportrait'); bb.prepend(pic); }
+    pic.replaceChildren(this.monsterImg(b.bossKind || b.kind, variant));
+    let tag = bb.querySelector('.btag');
+    if (!tag) { tag = h('small.btag'); bb.insertBefore(tag, bb.querySelector('.bname')); }
+    tag.textContent = label;
+    bb.classList.remove('intro'); void bb.offsetWidth; bb.classList.add('intro');
   }
   rewards(list, title = 'Récompenses !', opts = {}) {
     if (!list || !list.length) return;
@@ -437,7 +444,7 @@ export class UI {
     this.toasts.append(t);
     setTimeout(() => t.classList.add('out'), 2200);
     setTimeout(() => t.remove(), 2600);
-    while (this.toasts.children.length > 4) this.toasts.firstChild.remove();
+    while (this.toasts.children.length > 2) this.toasts.firstChild.remove();
   }
   loot(drops) {
     for (const id in drops) {
@@ -475,9 +482,17 @@ export class UI {
     this.powerDelta.classList.remove('show'); void this.powerDelta.offsetWidth; this.powerDelta.classList.add('show');
   }
   banner(text, sub = '', cls = '') {
-    const b = h('div.big-banner', { cls }, h('b', null, text), sub ? h('small', null, sub) : null);
-    this.stageEl.append(b);
-    setTimeout(() => b.remove(), 2000);
+    this.lane.replaceChildren();
+    const b = h('div.ann-banner', { cls }, h('b', null, text), sub ? h('small', null, sub) : null);
+    this.lane.append(b);
+    setTimeout(() => b.remove(), 1900);
+  }
+  // le couloir d'annonces suit la hauteur réelle du HUD
+  placeLane() {
+    const hud = this.stageEl.querySelector('.hud');
+    if (!hud) return;
+    const top = Math.round(hud.getBoundingClientRect().bottom - this.app.getBoundingClientRect().top) + 2;
+    if (top !== this.laneTop) { this.laneTop = top; this.lane.style.top = top + 'px'; }
   }
   classReveal(C) { classReveal(this, this.g, C); }
   // bandeau du coup final de classe (couleur de la classe)
@@ -486,10 +501,9 @@ export class UI {
     if (!C) return;
     const el = this.cutinEl;
     el.hidden = false;
-    el.className = 'cutin cls';
+    el.className = 'cutin cast-pill cls';
     el.style.setProperty('--rc', C.color);
-    el.innerHTML = '';
-    el.append(h('img', { src: this.g.portrait(), alt: '' }), h('div', null, h('small', null, `${C.name} · ${C.role}`), h('b', null, M.ult.name)));
+    el.replaceChildren(h('img', { src: this.g.portrait(), alt: '' }), h('b', null, M.ult.name));
     void el.offsetWidth;
     el.classList.add('play');
     clearTimeout(this.cutT);
@@ -499,13 +513,24 @@ export class UI {
   cutin(sk) {
     const el = this.cutinEl;
     el.hidden = false;
-    el.className = 'cutin r' + sk.r;
-    el.innerHTML = '';
-    el.append(h('img', { src: this.g.portrait(), alt: '' }), h('div', null, h('small', null, RARITIES[sk.r].name), h('b', null, sk.name)));
+    el.className = 'cutin cast-pill r' + sk.r;
+    el.style.removeProperty('--rc');
+    el.replaceChildren(h('span.cp-ic', { html: icon('sk_' + sk.id) }), h('b', null, sk.name));
     void el.offsetWidth;
     el.classList.add('play');
     clearTimeout(this.cutT);
-    this.cutT = setTimeout(() => { el.hidden = true; }, 1100);
+    this.cutT = setTimeout(() => { el.hidden = true; }, 1000);
+  }
+  // le carton passe à l'étape suivante : grande révélation
+  boxEvolve(tier) {
+    const T = BOX_TIERS[tier], prev = BOX_TIERS[tier - 1];
+    sfx('legendary');
+    const body = h('div.box-evolve', null,
+      h('div.bev-row', null, prev ? h('div.bev-old', { html: boxSVG(tier - 1) }) : null, h('i.bev-arrow', null, '➜'), h('div.bev-new', { html: boxSVG(tier) })),
+      h('b.bev-name', null, T.name), h('p.small.center', null, T.desc),
+      h('p.small.muted.center', null, `Étape ${tier + 1} / ${BOX_TIERS.length}${BOX_TIERS[tier + 1] ? ` · prochaine : ${BOX_TIERS[tier + 1].name} au niveau ${(tier + 1) * 3 + 1}` : ' · étape ultime !'}`));
+    this.modal({ title: 'Votre carton évolue !', body, buttons: [{ label: 'Magnifique !', cls: 'gold' }], rays: tier >= 6 ? '#ffd23f' : '#ffffff', cls: 'legendary' });
+    this.boxFx(Math.min(8, 2 + Math.floor(tier * 0.7)));
   }
   // suspense : le carton tremble et brille à la couleur de la rareté qui arrive
   boxCharge(r) {
@@ -590,7 +615,12 @@ export class UI {
     const pf = (v) => (v < 0.01 ? v.toFixed(4) : v < 1 ? v.toFixed(3) : v.toFixed(1)) + '%';
     const table = h('div.odds', null, RARITIES.map((r, i) => (odds[i] > 0 || next[i] > 0) ? h('div.orow', { style: { '--rc': r.color } }, h('i'), h('span', null, r.name), h('b', null, pf(odds[i])), up.max ? null : h('em', { cls: next[i] > odds[i] ? 'up' : next[i] < odds[i] ? 'down' : '' }, '→ ' + pf(next[i]))) : null),
       h('div.orow', { style: { '--rc': '#fff27a' } }, h('i'), h('span', null, 'Relique'), h('b', null, '0.0005%'), null));
-    const body = h('div', null, h('p.center', null, `Carton magique niveau ${st.box.lvl}${up.max ? ' (MAX)' : ` → ${st.box.lvl + 1}`}`), table);
+    const tier = boxTier(st.box.lvl), nt = BOX_TIERS[tier + 1];
+    const evo = h('div.box-next', null, h('div.bn-now', { html: boxSVG(tier) }),
+      h('div.grow', null, h('b', null, BOX_TIERS[tier].name), h('small.muted', null, BOX_TIERS[tier].desc),
+        nt ? h('small.bn-next', null, `Prochaine évolution au niveau ${(tier + 1) * 3 + 1} : ${nt.name}`) : h('small.bn-next', null, 'Évolution ultime atteinte !')),
+      nt ? h('div.bn-then', { html: boxSVG(tier + 1) }) : null);
+    const body = h('div', null, evo, h('p.center', null, `Carton magique niveau ${st.box.lvl}${up.max ? ' (MAX)' : ` → ${st.box.lvl + 1}`}`), table);
     const btns = [];
     if (!up.max) {
       if (!up.busy) btns.push({ label: 'Améliorer', sub: `${fmt(up.gold)} or · ${fmtTime(up.secs)}`, cls: st.res.gold >= up.gold ? 'gold' : 'gray', fn: () => { g.upgradeBox(); } });
@@ -633,22 +663,5 @@ export class UI {
   }
 }
 
-const BOX_SVG = `<svg viewBox="0 0 160 140" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="bxF" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e8b06a"/><stop offset="1" stop-color="#b9783a"/></linearGradient>
-    <linearGradient id="bxS" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#c98d4f"/><stop offset="1" stop-color="#93582a"/></linearGradient>
-    <linearGradient id="bxT" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f6cf8e"/><stop offset="1" stop-color="#d9a061"/></linearGradient>
-  </defs>
-  <g class="bx-body">
-    <path d="M22 58 L80 74 L80 132 L22 114 Z" fill="url(#bxS)" stroke="#5a3010" stroke-width="3" stroke-linejoin="round"/>
-    <path d="M80 74 L138 58 L138 114 L80 132 Z" fill="url(#bxF)" stroke="#5a3010" stroke-width="3" stroke-linejoin="round"/>
-    <path d="M22 58 L80 42 L138 58 L80 74 Z" fill="#3a1e08"/>
-    <path d="M104 92 l4 -6 l4 6 m-8 6 h8" stroke="#7a4a1a" stroke-width="3" fill="none" stroke-linecap="round" opacity=".7"/>
-    <g fill="#7a4a1a" opacity=".55"><ellipse cx="44" cy="96" rx="6" ry="5"/><circle cx="37" cy="88" r="2.6"/><circle cx="42" cy="85" r="2.6"/><circle cx="48" cy="86" r="2.6"/><circle cx="52" cy="90" r="2.6"/></g>
-    <path d="M60 104 l40 -10" stroke="#e8c690" stroke-width="7" opacity=".7"/>
-  </g>
-  <g class="bx-ears"><path d="M58 52 l8 -20 l10 16 z" fill="#f39a3d" stroke="#5a2a00" stroke-width="2.5" stroke-linejoin="round"/><path d="M86 47 l12 -18 l6 20 z" fill="#f39a3d" stroke="#5a2a00" stroke-width="2.5" stroke-linejoin="round"/><path d="M62 48 l4 -10 l5 8z M90 45 l7 -9 l3 10z" fill="#ff9fb2"/></g>
-  <path class="bx-flap l" d="M22 58 L80 42 L60 22 L4 38 Z" fill="url(#bxT)" stroke="#5a3010" stroke-width="3" stroke-linejoin="round"/>
-  <path class="bx-flap r" d="M138 58 L80 42 L100 22 L156 38 Z" fill="url(#bxT)" stroke="#5a3010" stroke-width="3" stroke-linejoin="round"/>
-</svg>`;
+// le carton évolue en 10 étapes (src/gfx/boxart.js)
 export { catFullURL, catPortraitURL, itemIconURL, keepable, ELEMENTS };

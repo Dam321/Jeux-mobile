@@ -38,6 +38,8 @@ import { catPortraitURL, catFullURL, FURS, PATTERNS, EYES, EYE_STYLES, EARS, TAI
 import { RCOL } from './gfx/gear.js';
 import { kittenFullURL } from './gfx/kittens.js';
 import { classPicker } from './ui/classui.js';
+import { altarCost, altarCostN, altarMilestone } from './altar.js';
+import { boxTier } from './gfx/boxart.js';
 import { ensureEvent, eventAdd, eventClaimable, EVENT_MILESTONES, EVENT_SHOP, tiersOf, BESTIARY_TIERS, BESTIARY_BOSS_TIERS, BESTIARY_REWARDS } from './event.js';
 import {
   ensureGuilds, guildById, myGuild, tickGuildBoss, guildBossOf, guildBossChest, guildBoard, memberBoard, guildRankReward, guildInfo,
@@ -204,9 +206,10 @@ class Game {
     this.battle.speed = this.battle.speed >= max ? 1 : this.battle.speed + 1;
     sfx('click');
   }
-  onEncounterStart() { this.ui.updateStageInfo(); this.ui.bossBar.hidden = true; this.ui.renderSkillRow(); }
+  onEncounterStart() { this.ui.updateStageInfo(); this.ui.bossBar.hidden = true; this.ui.bossBar.parentNode.classList.remove('bossfight'); this.ui.renderSkillRow(); }
   onBoss(b) {
     const bb = this.ui.bossBar;
+    bb.parentNode.classList.toggle('bossfight', !!b); // HUD plus court pendant un boss
     if (!b) { bb.hidden = true; return; }
     bb.hidden = false;
     bb.querySelector('.bname').textContent = b.name;
@@ -438,9 +441,11 @@ class Game {
     const st = this.st;
     if (st.box.upUntil && Date.now() >= st.box.upUntil) {
       st.box.upUntil = 0;
+      const before = boxTier(st.box.lvl);
       st.box.lvl = Math.min(BOX_MAX_LEVEL, st.box.lvl + 1);
       sfx('levelup');
       this.ui.banner(`CARTON NIVEAU ${st.box.lvl}`, 'Meilleures chances de raretés !', 'level');
+      if (boxTier(st.box.lvl) > before) { this.ui.updateHud(); setTimeout(() => this.ui.boxEvolve(boxTier(st.box.lvl)), 700); }
     }
   }
   finishBox() { this.checkBox(); this.ui.updateHud(); }
@@ -1115,6 +1120,18 @@ class Game {
     return !G.checkin || !G.goldDon || G.tries > 0 || G.chests > 0 || this.guildRankClaimable();
   }
 
+  // ------------------------------------------------------------------ Autel de Bastet
+  altarOffer(n = 1) {
+    const A = this.st.altar, cost = altarCostN(A.lvl, n);
+    if (!this.spendGems(cost)) return;
+    const from = A.lvl;
+    A.lvl += n;
+    for (let l = from + 1; l <= A.lvl; l++) { const m = altarMilestone(l); if (m) this.give(m, `Autel de Bastet : niveau ${l} !`, true); }
+    sfx('legendary'); this.battle.flash('#ffd23f', 0.35);
+    this.ui.toast(`Bastet vous bénit : niveau ${A.lvl} (+${A.lvl} % ATQ et PV)`, 'gold');
+    this.recalc(); this.checkTitles(); this.ui.refresh();
+  }
+
   // ------------------------------------------------------------------ Festival de la semaine
   claimEvent(i) {
     const st = this.st, M = EVENT_MILESTONES[i];
@@ -1352,7 +1369,7 @@ class Game {
       claw: st.camp.best >= 20, ratHunter: st.stats.kills >= 1000, climber: st.tower.best >= 25, artisan: st.artisan.lvl >= 20,
       forgemage: [...Object.values(st.gear), ...st.bag].some((x) => x && (x.upg || 0) >= 10), tamer: has(25), baron: st.stats.sold >= 100,
       conqueror: st.tower.best >= 100, nightmare: this.era().e >= 2, infernal: this.era().e >= 3, unstoppable: st.tower.best >= 250,
-      emperor: this.stats.vip >= 15, primordial: Object.keys(st.kittens.owned).some((id) => KITTEN_BY_ID[id] && KITTEN_BY_ID[id].r >= 8), arenaLegend: st.arena.best <= 3,
+      emperor: this.stats.vip >= 15, catGod: this.stats.vip >= 20, bastet: (st.altar.lvl || 0) >= 50, primordial: Object.keys(st.kittens.owned).some((id) => KITTEN_BY_ID[id] && KITTEN_BY_ID[id].r >= 8), arenaLegend: st.arena.best <= 3,
     };
     for (const id in conds) if (conds[id] && !st.cos.titles.includes(id)) { st.cos.titles.push(id); this.ui.toast(`Nouveau titre : « ${TITLE_BY_ID[id].name} » !`, 'gold'); sfx('levelup'); }
   }

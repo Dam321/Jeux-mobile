@@ -1131,3 +1131,75 @@ img { transition: opacity .18s; }
 .bst-stars { display: flex; gap: 3px; }
 .bst-stars i { width: 9px; height: 9px; clip-path: polygon(50% 0, 62% 38%, 100% 50%, 62% 62%, 50% 100%, 38% 62%, 0 50%, 38% 38%); background: #4a3a7a; }
 .bst-stars i.on { background: #ffd23f; }
+
+/* ===================================================================== v5 : écran sans chevauchement */
+/* couloir d'annonces sous le HUD : messages et bannières s'empilent, jamais l'un sur l'autre */
+.ann-lane { position: absolute; z-index: 72; top: 180px; left: 50%; transform: translateX(-50%); width: min(92%, 360px); display: grid; justify-items: center; pointer-events: none; }
+.toasts { top: 92px; gap: 3px; width: min(88%, 340px); }
+.toasts .toast { padding: 3px 12px; font-size: 12px; border-radius: 11px; border-width: 1.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: 0 3px 10px rgba(0,0,0,.45); }
+.hud.bossfight .stage-info { display: none; }
+.ann-banner { justify-self: center; text-align: center; padding: 2px 14px 4px; border-radius: 14px; background: radial-gradient(ellipse at center, rgba(20, 8, 50, .78), rgba(20, 8, 50, .35) 70%, transparent); animation: annIn 1.9s ease-out forwards; }
+.ann-banner b { display: block; font: 26px/1 var(--display); font-weight: 400; letter-spacing: 1px; background: linear-gradient(#fff6b0, #ffcc33 50%, #ff8a1a); -webkit-background-clip: text; background-clip: text; color: transparent; filter: drop-shadow(0 2px 0 #5a2a00) drop-shadow(0 0 8px rgba(255, 180, 40, .55)); }
+.ann-banner small { display: inline-block; margin-top: 2px; font: 12px var(--display); color: #f0e8ff; }
+.ann-banner.small b { font-size: 20px; }
+.ann-banner.boss b { font-size: 30px; }
+.ann-banner.lose b { background-image: linear-gradient(#ffd6da, #ff4d5e 60%, #9c0f28); filter: drop-shadow(0 2px 0 #3a0010); }
+.ann-banner.level b, .ann-banner.chapter b { background-image: linear-gradient(#ffffff, #7fe9ff 50%, #2a6fe0); filter: drop-shadow(0 2px 0 #0a2a5a) drop-shadow(0 0 10px rgba(80, 200, 255, .6)); }
+.ann-banner.vip b { background-image: linear-gradient(110deg, #ff7ae0, #ffcc33, #48e1ff); }
+@keyframes annIn { 0% { opacity: 0; transform: translateY(-10px) scale(.8); } 12% { opacity: 1; transform: translateY(0) scale(1.06); } 20% { transform: scale(1); } 80% { opacity: 1; } 100% { opacity: 0; transform: translateY(-6px); } }
+
+/* médaillon de sort : petit, au-dessus des boutons de pouvoir, ne cache rien */
+.cutin.cast-pill { top: auto; bottom: 62px; left: 50%; right: auto; height: auto; transform: translateX(-50%); gap: 6px; padding: 3px 12px 3px 4px; border: 2px solid var(--rc, #ffd23f); border-radius: 16px; background: rgba(16, 6, 44, .88); box-shadow: 0 0 14px var(--rc, #ffd23f); white-space: nowrap; }
+.cutin.cast-pill img, .cutin.cast-pill .cp-ic { width: 28px; height: 28px; margin: 0; filter: none; flex: none; }
+.cutin.cast-pill .cp-ic svg { width: 100%; height: 100%; }
+.cutin.cast-pill b { font: 14px var(--display); font-weight: 400; color: #fff; text-shadow: 0 0 8px var(--rc, #ffd23f), 0 2px 0 #000; }
+.cutin.cast-pill.play { animation: pillIn 1s ease-out forwards; }
+.cutin.cast-pill.play img { animation: none; }
+@keyframes pillIn { 0% { opacity: 0; transform: translate(-50%, 12px) scale(.7); } 15% { opacity: 1; transform: translate(-50%, 0) scale(1.08); } 25% { transform: translate(-50%, 0) scale(1); } 80% { opacity: 1; } 100% { opacity: 0; transform: translate(-50%, -8px); } }
+
+/* barre de boss avec portrait et entrée animée (remplace la carte au centre) */
+.hud .boss-bar { display: grid; grid-template-columns: auto 1fr; column-gap: 6px; align-items: center; }
+.hud .boss-bar > :not(.bportrait) { grid-column: 2; }
+.boss-bar .bportrait { grid-row: 1 / span 4; width: 34px; height: 34px; border-radius: 12px; background: radial-gradient(rgba(255, 60, 80, .55), rgba(40, 0, 10, .85)); border: 2px solid #ff4d5e; overflow: hidden; display: grid; place-items: center; }
+.boss-bar .bportrait img { width: 38px; height: 38px; object-fit: contain; }
+.hud .boss-bar .bname { font-size: 13px; line-height: 1.1; }
+.hud .boss-bar .btrack { height: 9px; }
+.hud .boss-bar .bhp { font-size: 10px; line-height: 1.1; }
+.boss-bar .btag { font: 9px var(--display); letter-spacing: 2px; color: #ff9aa4; text-align: left; }
+.hud .boss-bar .bname { text-align: left; }
+.boss-bar.intro { animation: bossBarIn .9s cubic-bezier(.2, 1.5, .4, 1); }
+.boss-bar.intro .bportrait { animation: bossPic 1.2s ease-out; }
+@keyframes bossBarIn { 0% { transform: scale(1.6); opacity: 0; filter: brightness(2.5); } 40% { transform: scale(.96); opacity: 1; } 70% { transform: scale(1.02); filter: brightness(1); } 100% { transform: scale(1); } }
+@keyframes bossPic { 0%, 30% { box-shadow: 0 0 0 0 rgba(255, 60, 80, .9); } 100% { box-shadow: 0 0 0 18px rgba(255, 60, 80, 0); } }
+
+/* ===================================================================== v5 : Autel de Bastet */
+.altar { position: relative; overflow: hidden; display: flex; align-items: center; gap: 14px; padding: 14px; border-radius: 20px; background: radial-gradient(circle at 25% 55%, rgba(255, 210, 63, .45), transparent 55%), linear-gradient(135deg, #3a2400, #120a2e 70%); border: 2px solid #ffd23f; box-shadow: 0 0 26px rgba(255, 210, 63, .35); }
+.altar-glow { position: absolute; left: -10%; top: -60%; width: 70%; height: 220%; background: repeating-conic-gradient(from 0deg, rgba(255, 230, 120, .22) 0 6deg, transparent 6deg 18deg); animation: spin 14s linear infinite; pointer-events: none; }
+.altar-statue { position: relative; width: 92px; height: 92px; display: grid; place-items: center; border-radius: 50%; background: radial-gradient(#fff6b0, #ffb52e 60%, #8a4b00); box-shadow: 0 0 30px rgba(255, 210, 63, .8); animation: wbPulse 2.6s ease-in-out infinite; }
+.altar-statue .ic { width: 60px; height: 60px; }
+.altar-txt { position: relative; display: grid; }
+.altar-txt small { font: 11px var(--display); letter-spacing: 3px; color: #ffe48a; }
+.altar-txt b { font: 48px/1 var(--display); font-weight: 400; color: #fff; text-shadow: 0 0 16px #ffd23f, 0 3px 0 #5a2a00; }
+.altar-txt em { font-style: normal; font-size: 13px; font-weight: 700; color: #fff6b0; }
+
+/* ===================================================================== v5 : carton évolutif */
+.box-svg svg { overflow: visible; }
+.box-area[data-tier="0"] { --tierc: rgba(255, 92, 168, .5); } .box-area[data-tier="1"] { --tierc: rgba(74, 169, 255, .55); }
+.box-area[data-tier="2"] { --tierc: rgba(255, 170, 80, .6); } .box-area[data-tier="3"] { --tierc: rgba(140, 230, 120, .6); }
+.box-area[data-tier="4"] { --tierc: rgba(185, 104, 255, .65); } .box-area[data-tier="5"] { --tierc: rgba(255, 140, 60, .7); }
+.box-area[data-tier="6"] { --tierc: rgba(255, 210, 63, .8); } .box-area[data-tier="7"] { --tierc: rgba(255, 77, 94, .8); }
+.box-area[data-tier="8"] { --tierc: rgba(72, 243, 255, .85); } .box-area[data-tier="9"] { --tierc: rgba(255, 242, 122, .95); }
+.box-area[data-tier="9"] .box-glow { animation-duration: 1.6s; }
+.box-next { display: flex; align-items: center; gap: 8px; padding: 8px; margin-bottom: 8px; border-radius: 14px; background: rgba(0,0,0,.25); border: 1.5px solid #5e45ad; }
+.box-next b { display: block; font: 15px var(--display); font-weight: 400; color: var(--gold); }
+.box-next small { display: block; font-size: 11px; }
+.bn-next { margin-top: 3px; color: #8dffb4; font-weight: 700; }
+.bn-now, .bn-then { flex: none; width: 64px; height: 56px; }
+.bn-then { width: 54px; height: 48px; filter: brightness(.5) drop-shadow(0 0 6px rgba(255, 210, 63, .6)); }
+.bn-now svg, .bn-then svg, .bev-old svg, .bev-new svg { width: 100%; height: 100%; overflow: visible; }
+.box-evolve { display: grid; justify-items: center; gap: 6px; }
+.bev-row { display: flex; align-items: center; gap: 10px; }
+.bev-old { width: 70px; height: 62px; filter: grayscale(.6) brightness(.7); }
+.bev-arrow { font: 26px var(--display); font-style: normal; color: var(--gold); animation: fadeUp .6s both; }
+.bev-new { width: 170px; height: 150px; filter: drop-shadow(0 0 18px rgba(255, 210, 63, .7)); animation: clsImg .8s cubic-bezier(.2, 1.5, .4, 1) both; }
+.bev-name { font: 26px var(--display); font-weight: 400; color: #fff; text-shadow: 0 0 14px var(--gold), 0 3px 0 #000; }

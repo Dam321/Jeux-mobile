@@ -168,9 +168,9 @@ export function dupNeed(lvl) { return lvl + 1; }
 
 // ---------------------------------------------------------------- VIP
 // points VIP = centimes dépensés
-export const VIP_THRESHOLDS = [0, 99, 500, 1500, 3000, 5000, 10000, 20000, 35000, 50000, 80000, 120000, 200000, 350000, 500000, 1000000];
+export const VIP_THRESHOLDS = [0, 99, 500, 1500, 3000, 5000, 10000, 20000, 35000, 50000, 80000, 120000, 200000, 350000, 500000, 1000000, 1500000, 2500000, 4000000, 6000000, 10000000];
 export const VIP_PERKS = VIP_THRESHOLDS.map((_, v) => ({
-  stat: [0, 3, 5, 8, 11, 15, 19, 24, 30, 36, 43, 52, 62, 75, 90, 120][v], // % ATQ & PV
+  stat: [0, 3, 5, 8, 11, 15, 19, 24, 30, 36, 43, 52, 62, 75, 90, 120, 140, 165, 195, 230, 270][v], // % ATQ & PV
   idle: v * 6, // % revenus passifs
   offlineH: OFFLINE_CAP_H + Math.min(12, v), // heures max hors-ligne
   dungeonBuys: 1 + Math.floor(v / 2),
@@ -200,6 +200,11 @@ export const VIP_TEXT = [
   '+75% ATQ/PV',
   '+90% ATQ/PV',
   '+120% ATQ/PV — Titre « Empereur des Chats »',
+  '+140% ATQ/PV, 320 gemmes par jour',
+  '+165% ATQ/PV, +85% chance de butin',
+  '+195% ATQ/PV, 10 achats de tickets par jour',
+  '+230% ATQ/PV, 380 gemmes par jour',
+  '+270% ATQ/PV — Titre « Divinité Féline »',
 ];
 export function vipLevel(points) {
   let v = 0;

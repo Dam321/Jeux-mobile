@@ -1,37 +1,198 @@
 // =====================================================================
 //  Effets visuels 2D : particules additives, entailles, ondes de choc,
-//  rayons, éclairs, projectiles, colonnes de lumière, chiffres de dégâts.
+//  rayons, éclairs, projectiles à traînée, colonnes de lumière, décalques
+//  au sol (brûlures, fissures, givre), cercles runiques, assombrissement
+//  du décor, charges d'énergie, chiffres de dégâts.
+//  Tous les halos sont des sprites pré-rendus (aucun canvas créé par image).
 // =====================================================================
-import { rgba, shade, ell } from './draw.js';
+import { shade, ell } from './draw.js';
 
 const MAXP = 1100;
-const spriteCache = new Map();
-function glowSprite(color, kind) {
-  const key = color + kind;
-  if (spriteCache.has(key)) return spriteCache.get(key);
-  const c = document.createElement('canvas');
-  c.width = c.height = 64;
-  const g = c.getContext('2d');
-  if (kind === 'star') {
-    const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-    gr.addColorStop(0, rgba('#ffffff', 1)); gr.addColorStop(0.15, rgba(color, 0.9)); gr.addColorStop(1, rgba(color, 0));
-    g.fillStyle = gr;
-    g.beginPath();
-    for (let i = 0; i < 8; i++) { const a = (i / 8) * Math.PI * 2; const r = i % 2 ? 6 : 32; g.lineTo(32 + Math.cos(a) * r, 32 + Math.sin(a) * r); }
-    g.closePath(); g.fill();
-  } else if (kind === 'smoke') {
-    const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-    gr.addColorStop(0, rgba(color, 0.55)); gr.addColorStop(0.6, rgba(color, 0.25)); gr.addColorStop(1, rgba(color, 0));
-    g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
-  } else if (kind === 'bubble') {
-    g.strokeStyle = rgba(color, 0.9); g.lineWidth = 4; g.beginPath(); g.arc(32, 32, 26, 0, Math.PI * 2); g.stroke();
-    g.fillStyle = rgba('#ffffff', 0.7); g.beginPath(); g.arc(22, 22, 6, 0, Math.PI * 2); g.fill();
-  } else {
-    const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-    gr.addColorStop(0, rgba('#ffffff', 1)); gr.addColorStop(0.25, rgba(color, 0.85)); gr.addColorStop(0.6, rgba(color, 0.25)); gr.addColorStop(1, rgba(color, 0));
-    g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+const TAU = Math.PI * 2;
+const WHITE = '#ffffff';
+
+// ------------------------------------------------------------ couleurs (cache hex → rgb)
+const RGB = new Map();
+function rgbOf(hex) {
+  let c = RGB.get(hex);
+  if (!c) {
+    let h = hex.replace('#', '');
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    const n = parseInt(h, 16);
+    c = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    RGB.set(hex, c);
   }
-  spriteCache.set(key, c);
+  return c;
+}
+export function ca(hex, a) {
+  const c = rgbOf(hex);
+  return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + (a <= 0 ? 0 : a >= 1 ? 1 : a.toFixed(3)) + ')';
+}
+
+// ------------------------------------------------------------ sprites pré-rendus (cache par forme puis couleur)
+const SPR = new Map();
+function cv(w, h) { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
+function rad(g, x, y, r, stops) {
+  const gr = g.createRadialGradient(x, y, 0, x, y, r);
+  for (let i = 0; i < stops.length; i += 2) gr.addColorStop(stops[i], stops[i + 1]);
+  return gr;
+}
+function lin(g, x0, y0, x1, y1, stops) {
+  const gr = g.createLinearGradient(x0, y0, x1, y1);
+  for (let i = 0; i < stops.length; i += 2) gr.addColorStop(stops[i], stops[i + 1]);
+  return gr;
+}
+function heartPath(g, s) {
+  g.beginPath(); g.moveTo(0, s);
+  g.bezierCurveTo(-s * 1.6, -s * 0.2, -s * 0.6, -s * 1.4, 0, -s * 0.4);
+  g.bezierCurveTo(s * 0.6, -s * 1.4, s * 1.6, -s * 0.2, 0, s);
+  g.closePath();
+}
+function build(color, kind) {
+  let c, g;
+  switch (kind) {
+    case 'star': {
+      c = cv(64, 64); g = c.getContext('2d');
+      g.fillStyle = rad(g, 32, 32, 32, [0, ca(WHITE, 1), 0.15, ca(color, 0.9), 1, ca(color, 0)]);
+      g.beginPath();
+      for (let i = 0; i < 8; i++) { const a = (i / 8) * TAU; const r = i % 2 ? 6 : 32; g.lineTo(32 + Math.cos(a) * r, 32 + Math.sin(a) * r); }
+      g.closePath(); g.fill();
+      g.globalCompositeOperation = 'lighter';
+      g.fillStyle = rad(g, 32, 32, 13, [0, ca(WHITE, 0.85), 1, ca(color, 0)]); g.fillRect(0, 0, 64, 64);
+      break;
+    }
+    case 'smoke':
+      c = cv(64, 64); g = c.getContext('2d');
+      g.fillStyle = rad(g, 32, 32, 32, [0, ca(color, 0.55), 0.6, ca(color, 0.25), 1, ca(color, 0)]); g.fillRect(0, 0, 64, 64);
+      break;
+    case 'bubble':
+      c = cv(64, 64); g = c.getContext('2d');
+      g.fillStyle = ca(color, 0.14); g.beginPath(); g.arc(32, 32, 26, 0, TAU); g.fill();
+      g.strokeStyle = ca(color, 0.9); g.lineWidth = 4; g.stroke();
+      g.fillStyle = ca(WHITE, 0.75); g.beginPath(); g.arc(22, 22, 6, 0, TAU); g.fill();
+      break;
+    case 'soft':
+      c = cv(64, 64); g = c.getContext('2d');
+      g.fillStyle = rad(g, 32, 32, 32, [0, ca(color, 0.7), 0.45, ca(color, 0.28), 1, ca(color, 0)]); g.fillRect(0, 0, 64, 64);
+      break;
+    case 'flare': { // étoile à 4 branches + reflet anamorphique
+      c = cv(128, 128); g = c.getContext('2d'); g.globalCompositeOperation = 'lighter';
+      const st = [0, ca(WHITE, 1), 0.22, ca(color, 0.85), 1, ca(color, 0)];
+      g.save(); g.translate(64, 64); g.scale(1, 0.05); g.fillStyle = rad(g, 0, 0, 64, st); g.beginPath(); g.arc(0, 0, 64, 0, TAU); g.fill(); g.restore();
+      g.save(); g.translate(64, 64); g.scale(0.045, 0.72); g.fillStyle = rad(g, 0, 0, 64, st); g.beginPath(); g.arc(0, 0, 64, 0, TAU); g.fill(); g.restore();
+      g.fillStyle = rad(g, 64, 64, 26, [0, ca(WHITE, 1), 0.3, ca(color, 0.7), 1, ca(color, 0)]); g.fillRect(0, 0, 128, 128);
+      break;
+    }
+    case 'streak': // trait lumineux horizontal (étincelles étirées selon la vitesse)
+      c = cv(64, 16); g = c.getContext('2d');
+      g.translate(32, 8); g.scale(1, 0.25);
+      g.fillStyle = rad(g, 0, 0, 32, [0, ca(WHITE, 1), 0.3, ca(color, 0.9), 0.7, ca(color, 0.3), 1, ca(color, 0)]);
+      g.beginPath(); g.arc(0, 0, 32, 0, TAU); g.fill();
+      break;
+    case 'ring':
+      c = cv(128, 128); g = c.getContext('2d');
+      g.fillStyle = rad(g, 64, 64, 64, [0, ca(color, 0), 0.6, ca(color, 0), 0.8, ca(color, 0.5), 0.88, ca(WHITE, 0.9), 0.95, ca(color, 0.4), 1, ca(color, 0)]);
+      g.fillRect(0, 0, 128, 128);
+      break;
+    case 'shard': // éclat de cristal (losange lumineux)
+      c = cv(32, 32); g = c.getContext('2d');
+      g.fillStyle = rad(g, 16, 16, 16, [0, ca(color, 0.5), 1, ca(color, 0)]); g.fillRect(0, 0, 32, 32);
+      g.fillStyle = ca(color, 0.95); g.beginPath(); g.moveTo(31, 16); g.lineTo(13, 9); g.lineTo(2, 16); g.lineTo(13, 23); g.closePath(); g.fill();
+      g.fillStyle = ca(WHITE, 0.95); g.beginPath(); g.moveTo(27, 16); g.lineTo(14, 12.5); g.lineTo(8, 16); g.lineTo(14, 19.5); g.closePath(); g.fill();
+      break;
+    case 'heart':
+      c = cv(64, 64); g = c.getContext('2d');
+      g.fillStyle = rad(g, 32, 32, 32, [0, ca(color, 0.6), 1, ca(color, 0)]); g.fillRect(0, 0, 64, 64);
+      g.translate(32, 33); heartPath(g, 16); g.fillStyle = color; g.fill();
+      g.fillStyle = ca(WHITE, 0.85); g.beginPath(); g.ellipse(-7, -6, 4, 2.6, -0.6, 0, TAU); g.fill();
+      break;
+    case 'plus':
+      c = cv(64, 64); g = c.getContext('2d');
+      g.fillStyle = rad(g, 32, 32, 32, [0, ca(color, 0.6), 1, ca(color, 0)]); g.fillRect(0, 0, 64, 64);
+      g.fillStyle = color; g.fillRect(26, 12, 12, 40); g.fillRect(12, 26, 40, 12);
+      g.fillStyle = ca(WHITE, 0.9); g.fillRect(29.5, 16, 5, 32); g.fillRect(16, 29.5, 32, 5);
+      break;
+    case 'leaf':
+      c = cv(32, 32); g = c.getContext('2d');
+      g.translate(16, 16); g.beginPath(); g.ellipse(0, 0, 14, 6, 0, 0, TAU);
+      g.fillStyle = color; g.fill(); g.lineWidth = 1.5; g.strokeStyle = shade(color, -0.5); g.stroke();
+      g.beginPath(); g.moveTo(-13, 0); g.lineTo(12, 0); g.stroke();
+      break;
+    case 'petal':
+      c = cv(32, 32); g = c.getContext('2d');
+      g.fillStyle = lin(g, 4, 16, 28, 16, [0, shade(color, 0.45), 1, color]);
+      g.beginPath(); g.ellipse(16, 16, 13, 7, 0, 0, TAU); g.fill();
+      break;
+    case 'ray': // rayon de lumière : vif à la base, s'estompe au bout
+      c = cv(128, 16); g = c.getContext('2d');
+      g.fillStyle = lin(g, 0, 0, 128, 0, [0, ca(WHITE, 0.95), 0.12, ca(color, 0.85), 0.6, ca(color, 0.25), 1, ca(color, 0)]); g.fillRect(0, 0, 128, 16);
+      g.globalCompositeOperation = 'destination-in';
+      g.fillStyle = lin(g, 0, 0, 0, 16, [0, 'rgba(0,0,0,0)', 0.5, 'rgba(0,0,0,1)', 1, 'rgba(0,0,0,0)']); g.fillRect(0, 0, 128, 16);
+      break;
+    case 'bar': // profil horizontal d'une colonne (étiré verticalement, s'estompe vers le haut)
+      c = cv(32, 64); g = c.getContext('2d');
+      g.fillStyle = lin(g, 0, 0, 32, 0, [0, ca(color, 0), 0.22, ca(color, 0.3), 0.42, ca(color, 0.85), 0.5, ca(WHITE, 1), 0.58, ca(color, 0.85), 0.78, ca(color, 0.3), 1, ca(color, 0)]); g.fillRect(0, 0, 32, 64);
+      g.globalCompositeOperation = 'destination-in';
+      g.fillStyle = lin(g, 0, 0, 0, 64, [0, 'rgba(0,0,0,0)', 0.3, 'rgba(0,0,0,1)', 1, 'rgba(0,0,0,1)']); g.fillRect(0, 0, 32, 64);
+      break;
+    case 'barc': // profil de colonne sans cœur blanc (sous-couche colorée)
+      c = cv(32, 64); g = c.getContext('2d');
+      g.fillStyle = lin(g, 0, 0, 32, 0, [0, ca(color, 0), 0.3, ca(color, 0.6), 0.5, ca(color, 0.9), 0.7, ca(color, 0.6), 1, ca(color, 0)]); g.fillRect(0, 0, 32, 64);
+      g.globalCompositeOperation = 'destination-in';
+      g.fillStyle = lin(g, 0, 0, 0, 64, [0, 'rgba(0,0,0,0)', 0.3, 'rgba(0,0,0,1)', 1, 'rgba(0,0,0,1)']); g.fillRect(0, 0, 32, 64);
+      break;
+    case 'barHc': // profil de rayon sans cœur blanc (sous-couche colorée)
+      c = cv(4, 32); g = c.getContext('2d');
+      g.fillStyle = lin(g, 0, 0, 0, 32, [0, ca(color, 0), 0.3, ca(color, 0.6), 0.5, ca(color, 0.9), 0.7, ca(color, 0.6), 1, ca(color, 0)]); g.fillRect(0, 0, 4, 32);
+      break;
+    case 'barH': // profil vertical d'un rayon (étiré horizontalement)
+      c = cv(4, 32); g = c.getContext('2d');
+      g.fillStyle = lin(g, 0, 0, 0, 32, [0, ca(color, 0), 0.22, ca(color, 0.3), 0.42, ca(color, 0.85), 0.5, ca(WHITE, 1), 0.58, ca(color, 0.85), 0.78, ca(color, 0.3), 1, ca(color, 0)]); g.fillRect(0, 0, 4, 32);
+      break;
+    default: // glow
+      c = cv(64, 64); g = c.getContext('2d');
+      g.fillStyle = rad(g, 32, 32, 32, [0, ca(WHITE, 1), 0.22, ca(color, 0.88), 0.55, ca(color, 0.28), 1, ca(color, 0)]); g.fillRect(0, 0, 64, 64);
+  }
+  return c;
+}
+export function sprite(color, kind = 'glow') {
+  let m = SPR.get(kind);
+  if (!m) { m = new Map(); SPR.set(kind, m); }
+  let c = m.get(color);
+  if (!c) { c = build(color, kind); m.set(color, c); }
+  return c;
+}
+// cercle magique pré-rendu (dessiné ensuite aplati au sol et en rotation)
+export function runeSprite(c1, c2 = WHITE, style = 'rune') {
+  const key = 'rune:' + style + c1 + c2;
+  let c = SPR.get(key);
+  if (c) return c;
+  c = cv(256, 256);
+  const g = c.getContext('2d');
+  g.translate(128, 128); g.lineCap = 'round'; g.lineJoin = 'round';
+  g.shadowColor = c1; g.shadowBlur = 10;
+  g.strokeStyle = c1; g.lineWidth = 6; g.beginPath(); g.arc(0, 0, 116, 0, TAU); g.stroke();
+  g.strokeStyle = c2; g.lineWidth = 3; g.beginPath(); g.arc(0, 0, 98, 0, TAU); g.stroke();
+  g.lineWidth = 2.5; g.strokeStyle = c1;
+  for (let i = 0; i < 36; i++) { const a = (i / 36) * TAU; const r0 = i % 3 ? 102 : 100, r1 = i % 3 ? 108 : 113; g.beginPath(); g.moveTo(Math.cos(a) * r0, Math.sin(a) * r0); g.lineTo(Math.cos(a) * r1, Math.sin(a) * r1); g.stroke(); }
+  g.fillStyle = c2;
+  for (let i = 0; i < 8; i++) { const a = (i / 8) * TAU + 0.2; g.save(); g.translate(Math.cos(a) * 80, Math.sin(a) * 80); g.rotate(a); g.fillRect(-5, -5, 10, 10); g.restore(); }
+  g.strokeStyle = c1; g.lineWidth = 4;
+  if (style === 'hex') {
+    for (let t = 0; t < 2; t++) { g.beginPath(); for (let i = 0; i <= 3; i++) { const a = (i / 3) * TAU + t * Math.PI - Math.PI / 2; const x = Math.cos(a) * 92, y = Math.sin(a) * 92; if (i) g.lineTo(x, y); else g.moveTo(x, y); } g.stroke(); }
+  } else if (style === 'paw') {
+    g.fillStyle = c1; g.globalAlpha = 0.85;
+    g.beginPath(); g.ellipse(0, 16, 30, 24, 0, 0, TAU); g.fill();
+    for (let i = 0; i < 4; i++) { const a = -Math.PI / 2 + (i - 1.5) * 0.62; g.beginPath(); g.ellipse(Math.cos(a) * 46, Math.sin(a) * 46 + 8, 11, 14, a + Math.PI / 2, 0, TAU); g.fill(); }
+    g.globalAlpha = 1;
+  } else if (style === 'sun') {
+    for (let i = 0; i < 12; i++) { const a = (i / 12) * TAU; g.beginPath(); g.moveTo(Math.cos(a - 0.12) * 50, Math.sin(a - 0.12) * 50); g.lineTo(Math.cos(a) * 90, Math.sin(a) * 90); g.lineTo(Math.cos(a + 0.12) * 50, Math.sin(a + 0.12) * 50); g.stroke(); }
+    g.beginPath(); g.arc(0, 0, 40, 0, TAU); g.stroke();
+  } else {
+    g.beginPath(); for (let i = 0; i <= 5; i++) { const a = (i * 2 * TAU) / 5 - Math.PI / 2; const x = Math.cos(a) * 92, y = Math.sin(a) * 92; if (i) g.lineTo(x, y); else g.moveTo(x, y); } g.stroke();
+    g.strokeStyle = c2; g.lineWidth = 3; g.beginPath(); g.arc(0, 0, 40, 0, TAU); g.stroke();
+  }
+  SPR.set(key, c);
   return c;
 }
 
@@ -48,156 +209,454 @@ const TEXT_STYLE = {
   name: { size: 15, fill: '#ffffff', stroke: '#2b1838', dur: 1.1, bg: '#5e45ad' },
 };
 
+// formes de particules : 3, 4, 11, 12 passent en mélange normal, les autres en additif
+const KIND = { glow: 0, star: 1, spark: 2, debris: 3, smoke: 4, bubble: 5, flare: 6, ember: 7, streak: 8, shard: 9, ring: 10, leaf: 11, petal: 12, heart: 13, plus: 14, soft: 15 };
+const SPRK = ['glow', 'star', 'streak', null, 'smoke', 'bubble', 'flare', 'glow', 'streak', 'shard', 'ring', 'leaf', 'petal', 'heart', 'plus', 'soft'];
+const NORMAL = new Uint8Array(16); NORMAL[3] = NORMAL[4] = NORMAL[11] = NORMAL[12] = 1;
+
+// chemin d'un croissant (entaille) le long d'un arc
+function crescent(ctx, r, s0, s1, w, N) {
+  ctx.beginPath();
+  for (let i = 0; i <= N; i++) { const u = i / N; const e = s0 + (s1 - s0) * u; const th = w * 0.5 * Math.sin(Math.PI * Math.pow(u, 0.7)); ctx.lineTo(Math.cos(e) * (r + th), Math.sin(e) * (r + th)); }
+  for (let i = N; i >= 0; i--) { const u = i / N; const e = s0 + (s1 - s0) * u; const th = w * 0.5 * Math.sin(Math.PI * Math.pow(u, 0.7)); ctx.lineTo(Math.cos(e) * (r - th), Math.sin(e) * (r - th)); }
+  ctx.closePath();
+}
+// ruban effilé à partir d'un tampon circulaire de positions (le plus ancien → le plus récent)
+function ribbonPath(ctx, rp, rc, start, RN, hw) {
+  ctx.beginPath();
+  for (let pass = 0; pass < 2; pass++) {
+    for (let jj = 0; jj < rc; jj++) {
+      const j = pass ? rc - 1 - jj : jj;
+      const i = (start + j) % RN, i0 = (start + Math.max(0, j - 1)) % RN, i1 = (start + Math.min(rc - 1, j + 1)) % RN;
+      const dx = rp[i1 * 2] - rp[i0 * 2], dy = rp[i1 * 2 + 1] - rp[i0 * 2 + 1];
+      const L = Math.hypot(dx, dy) || 1;
+      const w = hw * Math.pow(j / (rc - 1), 0.85) * (pass ? -1 : 1);
+      const x = rp[i * 2] - (dy / L) * w, y = rp[i * 2 + 1] + (dx / L) * w;
+      if (pass === 0 && jj === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+  }
+  ctx.closePath();
+}
+function drawRibbon(ctx, rp, rc, rh, RN, width, color, a) {
+  const start = (rh - rc + RN) % RN;
+  ctx.save();
+  ribbonPath(ctx, rp, rc, start, RN, width * 0.5); ctx.fillStyle = ca(color, 0.42 * a); ctx.fill();
+  ctx.globalCompositeOperation = 'lighter';
+  ribbonPath(ctx, rp, rc, start, RN, width * 0.32); ctx.fillStyle = ca(color, 0.55 * a); ctx.fill();
+  ribbonPath(ctx, rp, rc, start, RN, width * 0.14); ctx.fillStyle = ca(WHITE, 0.9 * a); ctx.fill();
+  ctx.restore();
+}
+function polyPath(ctx, p, n) { ctx.moveTo(p[0], p[1]); for (let i = 1; i <= n; i++) ctx.lineTo(p[i * 2], p[i * 2 + 1]); }
+
 export class FX {
   constructor() {
     this.n = 0;
-    const F = (k) => new Float32Array(MAXP);
+    const F = () => new Float32Array(MAXP);
     this.px = F(); this.py = F(); this.vx = F(); this.vy = F(); this.life = F(); this.max = F();
-    this.size = F(); this.size1 = F(); this.grav = F(); this.drag = F(); this.rot = F(); this.vr = F(); this.alpha = F();
-    this.kind = new Uint8Array(MAXP); // 0 glow,1 star,2 spark,3 debris,4 smoke,5 bubble
+    this.size = F(); this.size1 = F(); this.grav = F(); this.drag = F(); this.rot = F(); this.vr = F(); this.alpha = F(); this.sq = F();
+    this.kind = new Uint8Array(MAXP);
     this.col = new Array(MAXP);
+    this.spr = new Array(MAXP);
     this.items = [];
     this.texts = [];
     this.low = false;
+    this._dim = null;
   }
-  clear() { this.n = 0; this.items = []; this.texts = []; }
+  clear() { this.n = 0; this.items = []; this.texts = []; this._dim = null; }
 
   emit(x, y, vx, vy, color, size, life, o = {}) {
-    if (this.n >= MAXP) return;
+    if (this.n >= MAXP) return -1;
     const i = this.n++;
+    const kd = KIND[o.shape || 'glow'] ?? 0;
     this.px[i] = x; this.py[i] = y; this.vx[i] = vx; this.vy[i] = vy;
     this.col[i] = color; this.size[i] = size; this.size1[i] = o.endSize ?? 0;
     this.life[i] = 0; this.max[i] = life; this.grav[i] = o.gravity ?? 0; this.drag[i] = o.drag ?? 2;
-    this.rot[i] = Math.random() * 6.28; this.vr[i] = (Math.random() - 0.5) * 12; this.alpha[i] = o.alpha ?? 1;
-    this.kind[i] = { glow: 0, star: 1, spark: 2, debris: 3, smoke: 4, bubble: 5 }[o.shape || 'glow'] ?? 0;
+    this.rot[i] = o.rot ?? Math.random() * TAU; this.vr[i] = o.spin ?? (Math.random() - 0.5) * 12; this.alpha[i] = o.alpha ?? 1;
+    this.sq[i] = o.squash ?? 1;
+    this.kind[i] = kd;
+    this.spr[i] = kd === 3 ? null : sprite(color, SPRK[kd]);
+    return i;
   }
   burst(x, y, o = {}) {
     const n = Math.round((o.count ?? 16) * (this.low ? 0.5 : 1));
     const cols = Array.isArray(o.color) ? o.color : [o.color || '#ffffff'];
     const sp = o.speed ?? 120;
+    const eo = { gravity: o.gravity, drag: o.drag, shape: o.shape, endSize: o.endSize, alpha: o.alpha, squash: o.squash, spin: o.spin };
     for (let i = 0; i < n; i++) {
-      const a = o.angle != null ? o.angle + (Math.random() - 0.5) * (o.spreadA ?? 1) : Math.random() * Math.PI * 2;
+      const a = o.angle != null ? o.angle + (Math.random() - 0.5) * (o.spreadA ?? 1) : Math.random() * TAU;
       const s = sp * (0.35 + Math.random() * 0.65);
-      this.emit(x + (Math.random() - 0.5) * (o.spread ?? 0), y + (Math.random() - 0.5) * (o.spread ?? 0),
+      this.emit(x + (Math.random() - 0.5) * (o.spread ?? 0), y + (Math.random() - 0.5) * (o.spreadY ?? o.spread ?? 0),
         Math.cos(a) * s, Math.sin(a) * s * (o.flatY ?? 1) - (o.up ?? 0), cols[i % cols.length], (o.size ?? 8) * (0.6 + Math.random() * 0.8),
-        (o.life ?? 0.6) * (0.6 + Math.random() * 0.6), { gravity: o.gravity, drag: o.drag, shape: o.shape, endSize: o.endSize, alpha: o.alpha });
+        (o.life ?? 0.6) * (0.6 + Math.random() * 0.6), eo);
     }
   }
 
   add(dur, draw, layer = 'front', upd) { const it = { t: 0, dur, draw, layer, upd }; this.items.push(it); return it; }
+  custom(dur, draw, layer = 'front', upd) { return this.add(dur, draw, layer, upd); }
 
-  // entaille en arc de cercle (coup d'arme)
+  // entaille en croissant (coup d'arme) : corps coloré opaque (lisible sur fond clair), halo et cœur additifs
   slash(x, y, o = {}) {
-    const r = o.r ?? 34, arc = o.arc ?? 2.2, w = o.width ?? 12, ang = o.angle ?? -0.4, color = o.color || '#ffffff', dir = o.dir ?? 1;
+    const r = o.r ?? 34, arc = o.arc ?? 2.2, w = o.width ?? 12, ang = o.angle ?? -0.4, color = o.color || '#ffffff', dir = o.dir ?? 1, sq = o.squash ?? 0.75;
+    const under = o.under || color;
+    const tip = sprite(o.tip || color, 'flare');
+    const N = this.low ? 8 : 12;
     this.add(o.dur ?? 0.22, (ctx, k) => {
-      const head = Math.min(1, k * 1.7), tail = Math.max(0, k * 1.7 - 0.65);
+      const head = Math.min(1, k * 1.75), tail = Math.max(0, k * 1.75 - 0.72);
       if (head <= tail) return;
-      const a0 = ang - arc / 2, a1 = ang + arc / 2;
-      const s0 = a0 + (a1 - a0) * tail, s1 = a0 + (a1 - a0) * head;
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.scale(dir, o.squash ?? 0.75);
+      const a0 = ang - arc / 2;
+      const s0 = a0 + arc * tail, s1 = a0 + arc * head;
+      const fade = 1 - k * 0.5;
+      ctx.save(); ctx.translate(x, y); ctx.scale(dir, sq);
       ctx.globalCompositeOperation = 'lighter';
-      const steps = 14;
-      for (let i = 0; i < steps; i++) {
-        const u0 = i / steps, u1 = (i + 1) / steps;
-        const ww = w * Math.sin(Math.PI * (u0 + u1) / 2) * (1 - k * 0.5);
-        const e0 = s0 + (s1 - s0) * u0, e1 = s0 + (s1 - s0) * u1;
-        ctx.beginPath(); ctx.arc(0, 0, r, e0, e1 + 0.02);
-        ctx.lineWidth = ww * 1.8; ctx.strokeStyle = rgba(color, 0.35 * (1 - k)); ctx.stroke();
-        ctx.lineWidth = ww; ctx.strokeStyle = rgba(color, 0.9 * (1 - k * 0.6)); ctx.stroke();
-        ctx.lineWidth = ww * 0.35; ctx.strokeStyle = rgba('#ffffff', 1 - k * 0.5); ctx.stroke();
-      }
+      ctx.beginPath(); ctx.arc(0, 0, r, s0, s1);
+      ctx.lineWidth = w * 2.4; ctx.strokeStyle = ca(color, 0.16 * fade); ctx.stroke();
+      ctx.globalCompositeOperation = 'source-over';
+      crescent(ctx, r, s0, s1, w * fade, N); ctx.fillStyle = ca(under, 0.88 * fade); ctx.fill();
+      ctx.globalCompositeOperation = 'lighter';
+      crescent(ctx, r + w * 0.06, s0 + (s1 - s0) * 0.08, s1, w * 0.5 * fade, N); ctx.fillStyle = ca(color, 0.7 * fade); ctx.fill();
+      crescent(ctx, r + w * 0.12, s0 + (s1 - s0) * 0.22, s1, w * 0.22 * fade, N); ctx.fillStyle = ca(WHITE, fade); ctx.fill();
+      if (head < 1) { const hx = Math.cos(s1) * r, hy = Math.sin(s1) * r, fs = w * 2; ctx.drawImage(tip, hx - fs, hy - fs, fs * 2, fs * 2); }
       ctx.restore();
-    });
+    }, o.layer || 'front');
   }
+  // coupe droite (iaï, estoc) : trait effilé qui jaillit puis s'amincit
+  cut(x, y, o = {}) {
+    const L = o.len ?? 60, ang = o.angle ?? -0.5, w = o.width ?? 6, color = o.color || '#ffffff', under = o.under || color;
+    const tip = sprite(o.tip || color, 'flare');
+    this.add(o.dur ?? 0.2, (ctx, k) => {
+      const head = Math.min(1, k * 3.2), tail = Math.max(0, k * 1.6 - 0.45);
+      if (head <= tail) return;
+      const th = w * (k < 0.3 ? 1 : 1 - (k - 0.3) / 0.75);
+      const x0 = -L / 2 + L * tail, x1 = -L / 2 + L * head, xm = x0 + (x1 - x0) * 0.62;
+      ctx.save(); ctx.translate(x, y); ctx.rotate(ang);
+      ctx.beginPath(); ctx.moveTo(x0, 0); ctx.lineTo(xm, -th / 2); ctx.lineTo(x1, 0); ctx.lineTo(xm, th / 2); ctx.closePath();
+      ctx.fillStyle = ca(under, 0.9); ctx.fill();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.lineWidth = th * 2.2; ctx.strokeStyle = ca(color, 0.14); ctx.beginPath(); ctx.moveTo(x0, 0); ctx.lineTo(x1, 0); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x0 + (x1 - x0) * 0.15, 0); ctx.lineTo(xm, -th * 0.18); ctx.lineTo(x1, 0); ctx.lineTo(xm, th * 0.18); ctx.closePath();
+      ctx.fillStyle = ca(WHITE, 0.95); ctx.fill();
+      if (head < 1) { const fs = w * 2.6; ctx.drawImage(tip, x1 - fs, -fs, fs * 2, fs * 2); }
+      ctx.restore();
+    }, o.layer || 'front');
+  }
+  // griffures : n entailles parallèles
+  claw(x, y, o = {}) {
+    const n = o.n ?? 3, gap = o.gap ?? 7, ang = o.angle ?? -0.4, dir = o.dir ?? 1, sq = o.squash ?? 0.75;
+    for (let i = 0; i < n; i++) {
+      const off = (i - (n - 1) / 2) * gap;
+      this.slash(x + Math.cos(ang) * off * dir, y + Math.sin(ang) * off * sq, { ...o, dur: (o.dur ?? 0.24) + i * 0.02 });
+    }
+  }
+  // onde au sol (ellipse)
   ring(x, y, o = {}) {
     const r0 = o.r0 ?? 6, r1 = o.r1 ?? 60, color = o.color || '#ffffff', sq = o.squash ?? 0.35, w = o.width ?? 6;
     this.add(o.dur ?? 0.45, (ctx, k) => {
       const e = 1 - Math.pow(1 - k, 3);
-      const r = r0 + (r1 - r0) * e;
-      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      const r = r0 + (r1 - r0) * e, a = 1 - k;
+      ctx.save();
       ell(ctx, x, y, r, r * sq);
-      ctx.lineWidth = w * (1 - k) + 1; ctx.strokeStyle = rgba(color, 0.9 * (1 - k)); ctx.stroke();
-      ctx.lineWidth = w * 2.4 * (1 - k); ctx.strokeStyle = rgba(color, 0.25 * (1 - k)); ctx.stroke();
+      ctx.lineWidth = w * 1.4 * a + 1; ctx.strokeStyle = ca(color, 0.4 * a); ctx.stroke();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.lineWidth = w * 2.6 * a + 1; ctx.strokeStyle = ca(color, 0.18 * a); ctx.stroke();
+      ctx.lineWidth = w * a + 1; ctx.strokeStyle = ca(color, 0.75 * a); ctx.stroke();
+      ctx.lineWidth = Math.max(0.8, w * 0.3 * a); ctx.strokeStyle = ca(WHITE, 0.9 * a * a); ctx.stroke();
       ctx.restore();
     }, o.layer || 'back');
   }
+  // onde de choc dans le plan de l'écran (double anneau décalé, effet de distorsion)
+  shock(x, y, o = {}) {
+    const r1 = o.r ?? 80, color = o.color || '#ffffff', c2 = o.color2 || color, w = o.width ?? 8, sq = o.squash ?? 1;
+    this.add(o.dur ?? 0.4, (ctx, k) => {
+      const e = 1 - Math.pow(1 - k, 2.2), r = r1 * (0.12 + 0.88 * e), a = 1 - k;
+      ctx.save();
+      ell(ctx, x, y, r, r * sq);
+      ctx.lineWidth = w * 0.9 * a + 0.5; ctx.strokeStyle = ca(color, 0.35 * a); ctx.stroke();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.lineWidth = w * 2.4 * a + 0.5; ctx.strokeStyle = ca(color, 0.16 * a); ctx.stroke();
+      ctx.lineWidth = w * 0.45 * a + 0.6; ctx.strokeStyle = ca(WHITE, 0.85 * a); ctx.stroke();
+      ell(ctx, x, y, r * 0.92, r * 0.92 * sq);
+      ctx.lineWidth = w * 0.5 * a + 0.5; ctx.strokeStyle = ca(c2, 0.6 * a); ctx.stroke();
+      ctx.restore();
+    }, o.layer || 'front');
+  }
+  // éclair de lumière (sprite)
   blast(x, y, o = {}) {
-    const r1 = o.r ?? 60, color = o.color || '#ffb52e';
+    const r1 = o.r ?? 60, sq = o.squash ?? 1, al = o.alpha ?? 1;
+    const spr = sprite(o.color || '#ffb52e', o.soft ? 'soft' : 'glow');
     this.add(o.dur ?? 0.45, (ctx, k) => {
       const e = 1 - Math.pow(1 - k, 2.4);
-      const r = r1 * (0.25 + e * 0.75);
-      ctx.save(); ctx.globalCompositeOperation = 'lighter';
-      const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-      g.addColorStop(0, rgba('#ffffff', 0.9 * (1 - k))); g.addColorStop(0.35, rgba(color, 0.75 * (1 - k))); g.addColorStop(0.8, rgba(color, 0.25 * (1 - k))); g.addColorStop(1, rgba(color, 0));
-      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+      const r = r1 * (0.3 + e * 0.7);
+      ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = Math.pow(1 - k, 1.3) * al;
+      ctx.drawImage(spr, x - r, y - r * sq, r * 2, r * 2 * sq);
       ctx.restore();
+    }, o.layer || 'front');
+  }
+  // reflet d'impact : étoile à 4 branches + trait anamorphique
+  flare(x, y, o = {}) {
+    const s = o.size ?? 30, color = o.color || '#ffffff', len = o.len ?? 2.2, rot = o.rot ?? 0;
+    const spr = sprite(color, 'flare'), st = sprite(color, 'streak');
+    this.add(o.dur ?? 0.3, (ctx, k) => {
+      const a = k < 0.12 ? k / 0.12 : Math.pow(1 - (k - 0.12) / 0.88, 1.6);
+      const sc = s * (0.55 + 0.55 * Math.min(1, k * 4));
+      ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = a;
+      ctx.translate(x, y); if (rot) ctx.rotate(rot);
+      ctx.drawImage(spr, -sc, -sc, sc * 2, sc * 2);
+      if (len > 0) ctx.drawImage(st, -sc * len, -sc * 0.1, sc * len * 2, sc * 0.2);
+      ctx.restore();
+    }, o.layer || 'front');
+  }
+  // rayons de lumière divergents (tournent lentement)
+  rays(x, y, o = {}) {
+    const n = Math.max(3, Math.round((o.n ?? 10) * (this.low ? 0.5 : 1))), L = o.len ?? 120, w = o.width ?? 14, spin = o.spin ?? 0.6, sq = o.squash ?? 1;
+    const spr = sprite(o.color || '#fff2a0', 'ray');
+    const ang = new Float32Array(n), lf = new Float32Array(n);
+    const a0 = Math.random() * TAU;
+    for (let i = 0; i < n; i++) { ang[i] = a0 + (i / n) * TAU + (Math.random() - 0.5) * 0.5; lf[i] = 0.55 + Math.random() * 0.45; }
+    this.add(o.dur ?? 0.7, (ctx, k) => {
+      const a = k < 0.15 ? k / 0.15 : 1 - (k - 0.15) / 0.85;
+      const grow = 0.45 + 0.55 * Math.min(1, k * 3);
+      ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = a * (o.alpha ?? 0.8);
+      ctx.translate(x, y); ctx.scale(1, sq);
+      let prev = 0; const base = k * spin;
+      for (let i = 0; i < n; i++) { const t = ang[i] + base; ctx.rotate(t - prev); prev = t; const l = L * lf[i] * grow; ctx.drawImage(spr, 0, -w * 0.5 * lf[i], l, w * lf[i]); }
+      ctx.restore();
+    }, o.layer || 'front');
+  }
+  // colonne de lumière tombant du ciel
+  pillar(x, o = {}) {
+    const w = o.width ?? 40, color = o.color || '#ffd23f', y1 = o.y ?? 300, top = o.top ?? -20;
+    const bar = sprite(color, 'bar'), barc = sprite(o.under || shade(color, -0.15), 'barc'), gl = sprite(color, 'glow');
+    let tick = 0;
+    this.add(o.dur ?? 0.8, (ctx, k) => {
+      const a = k < 0.12 ? k / 0.12 : 1 - (k - 0.12) / 0.88;
+      const ww = w * (0.35 + a * 0.65);
+      ctx.save(); ctx.globalAlpha = a * 0.5;
+      ctx.drawImage(barc, x - ww * 0.9, top, ww * 1.8, y1 - top);
+      ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = a * (o.alpha ?? 1);
+      ctx.drawImage(bar, x - ww, top, ww * 2, y1 - top);
+      ctx.drawImage(gl, x - ww * 1.7, y1 - ww * 0.45, ww * 3.4, ww * 0.9);
+      ctx.restore();
+    }, o.layer || 'front', o.motes === false ? null : (k) => {
+      if (k > 0.75 || (++tick % (this.low ? 4 : 2))) return;
+      this.emit(x + (Math.random() - 0.5) * w * 0.7, y1 - Math.random() * 40, 0, -140 - Math.random() * 120, color, 3 + Math.random() * 3, 0.45, { shape: 'streak', drag: 0.5 });
     });
   }
-  pillar(x, o = {}) {
-    const w = o.width ?? 40, color = o.color || '#ffd23f', y1 = o.y ?? 300;
-    this.add(o.dur ?? 0.8, (ctx, k) => {
-      const a = k < 0.2 ? k / 0.2 : 1 - (k - 0.2) / 0.8;
-      const ww = w * (0.4 + a * 0.6);
-      ctx.save(); ctx.globalCompositeOperation = 'lighter';
-      const g = ctx.createLinearGradient(x - ww, 0, x + ww, 0);
-      g.addColorStop(0, rgba(color, 0)); g.addColorStop(0.35, rgba(color, 0.55 * a)); g.addColorStop(0.5, rgba('#ffffff', 0.9 * a)); g.addColorStop(0.65, rgba(color, 0.55 * a)); g.addColorStop(1, rgba(color, 0));
-      ctx.fillStyle = g; ctx.fillRect(x - ww, -20, ww * 2, y1 + 20);
-      ell(ctx, x, y1, ww * 1.4, ww * 0.35); ctx.fillStyle = rgba(color, 0.5 * a); ctx.fill();
-      ctx.restore();
-    }, 'front');
-  }
+  // rayon d'énergie (corps lumineux + spirales + éclat à la source)
   beam(x1, y1, x2, y2, o = {}) {
-    const color = o.color || '#ff3d55', w = o.width ?? 10;
+    const color = o.color || '#ff3d55', w = o.width ?? 10, c2 = o.color2 || WHITE;
+    const bar = sprite(color, 'barH'), barc = sprite(o.under || shade(color, -0.15), 'barHc'), fl = sprite(color, 'flare'), gl = sprite(color, 'glow');
+    const ph = Math.random() * 10;
     this.add(o.dur ?? 0.5, (ctx, k) => {
       const a = k < 0.12 ? k / 0.12 : 1 - (k - 0.12) / 0.88;
-      const tgt = o.follow ? o.follow(k) : [x2, y2];
-      const dx = tgt[0] - x1, dy = tgt[1] - y1, len = Math.hypot(dx, dy);
-      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      const tgt = o.follow ? o.follow(k) : null;
+      const tx = tgt ? tgt[0] : x2, ty = tgt ? tgt[1] : y2;
+      const dx = tx - x1, dy = ty - y1, len = Math.hypot(dx, dy);
+      const jit = 1 + Math.sin(k * 80 + ph) * 0.12;
+      const ww = w * jit * (0.55 + 0.45 * a);
+      ctx.save();
       ctx.translate(x1, y1); ctx.rotate(Math.atan2(dy, dx));
-      const jit = 1 + Math.sin(k * 80) * 0.12;
-      for (const [ww, c, al] of [[w * 2.6, color, 0.25], [w * 1.3, color, 0.7], [w * 0.45, '#ffffff', 1]]) {
-        ctx.fillStyle = rgba(c, al * a);
-        ctx.beginPath(); ctx.roundRect ? ctx.roundRect(0, -ww * jit / 2, len, ww * jit, ww / 2) : ctx.rect(0, -ww / 2, len, ww); ctx.fill();
+      ctx.globalAlpha = a * 0.7;
+      ctx.drawImage(barc, 0, -ww * 1.3, len, ww * 2.6);
+      ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = a * (o.alpha ?? 1);
+      ctx.drawImage(bar, 0, -ww * 1.4, len, ww * 2.8);
+      if (!o.plain && !this.low) {
+        ctx.lineWidth = Math.max(0.8, w * 0.16); ctx.strokeStyle = ca(c2, 0.65);
+        for (let s = 0; s < 2; s++) {
+          ctx.beginPath();
+          for (let i = 0; i <= 14; i++) { const u = i / 14; const yy = Math.sin(u * len * 0.11 - k * 46 + s * Math.PI + ph) * ww * 0.85 * Math.min(1, u * 4); if (i) ctx.lineTo(u * len, yy); else ctx.moveTo(0, yy); }
+          ctx.stroke();
+        }
       }
+      const fs = w * 2.6 * jit;
+      ctx.drawImage(fl, -fs, -fs, fs * 2, fs * 2);
+      ctx.drawImage(gl, len - w * 2.2, -w * 2.2, w * 4.4, w * 4.4);
       ctx.restore();
-    });
+    }, o.layer || 'front');
   }
+  // éclair ramifié qui scintille (3 tracés pré-calculés)
   lightning(x1, y1, x2, y2, o = {}) {
-    const pts = [[x1, y1]];
-    const n = 9;
-    for (let i = 1; i < n; i++) { const t = i / n; pts.push([x1 + (x2 - x1) * t + (Math.random() - 0.5) * 34, y1 + (y2 - y1) * t + (Math.random() - 0.5) * 10]); }
-    pts.push([x2, y2]);
-    const color = o.color || '#8fd9ff';
-    this.add(o.dur ?? 0.35, (ctx, k) => {
-      const f = Math.random() > 0.25 ? 1 - k : 0.25;
-      ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-      for (const [w, c, al] of [[14, color, 0.25], [6, color, 0.8], [2.4, '#ffffff', 1]]) {
-        ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); for (const p of pts) ctx.lineTo(p[0], p[1]);
-        ctx.lineWidth = w; ctx.strokeStyle = rgba(c, al * f); ctx.stroke();
+    const color = o.color || '#8fd9ff', W = o.width ?? 1, n = o.seg ?? 9, amp = o.amp ?? 34, dur = o.dur ?? 0.35;
+    const V = this.low ? 2 : 3, nb = Math.min(o.branches ?? 2, this.low ? 1 : 6);
+    const dx = x2 - x1, dy = y2 - y1, L = Math.hypot(dx, dy) || 1, nx = -dy / L, ny = dx / L, ba0 = Math.atan2(dy, dx);
+    const vars = [];
+    for (let v = 0; v < V; v++) {
+      const p = new Float32Array((n + 1) * 2);
+      p[0] = x1; p[1] = y1; p[n * 2] = x2; p[n * 2 + 1] = y2;
+      for (let i = 1; i < n; i++) { const t = i / n; const off = (Math.random() - 0.5) * amp * (0.45 + 0.55 * Math.sin(Math.PI * t)); p[i * 2] = x1 + dx * t + nx * off; p[i * 2 + 1] = y1 + dy * t + ny * off; }
+      const br = new Float32Array(nb * 8);
+      for (let b = 0; b < nb; b++) {
+        const j = 2 + Math.floor(Math.random() * Math.max(1, n - 3));
+        let cx = p[j * 2], cy = p[j * 2 + 1];
+        br[b * 8] = cx; br[b * 8 + 1] = cy;
+        const ba = ba0 + (Math.random() < 0.5 ? -1 : 1) * (0.5 + Math.random() * 0.6), bl = L * 0.1;
+        for (let s = 1; s < 4; s++) { cx += Math.cos(ba + (Math.random() - 0.5) * 1) * bl; cy += Math.sin(ba + (Math.random() - 0.5) * 1) * bl; br[b * 8 + s * 2] = cx; br[b * 8 + s * 2 + 1] = cy; }
       }
+      vars.push(p, br);
+    }
+    const gl = sprite(color, 'glow'), deep = shade(color, -0.35);
+    this.add(dur, (ctx, k) => {
+      const vi = Math.floor(k * dur * 30) % V;
+      const p = vars[vi * 2], br = vars[vi * 2 + 1];
+      const f = (Math.random() > 0.22 ? 1 : 0.3) * (1 - k * k);
+      ctx.save(); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      if (nb) {
+        ctx.beginPath();
+        for (let b = 0; b < nb; b++) { ctx.moveTo(br[b * 8], br[b * 8 + 1]); for (let s = 1; s < 4; s++) ctx.lineTo(br[b * 8 + s * 2], br[b * 8 + s * 2 + 1]); }
+        ctx.lineWidth = 2.4 * W; ctx.strokeStyle = ca(deep, 0.5 * f); ctx.stroke();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.lineWidth = 1.2 * W; ctx.strokeStyle = ca(color, 0.85 * f); ctx.stroke();
+        ctx.globalCompositeOperation = 'source-over';
+      }
+      ctx.beginPath(); polyPath(ctx, p, n);
+      ctx.lineWidth = 4.5 * W; ctx.strokeStyle = ca(deep, 0.55 * f); ctx.stroke();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.lineWidth = 10 * W; ctx.strokeStyle = ca(color, 0.16 * f); ctx.stroke();
+      ctx.lineWidth = 4 * W; ctx.strokeStyle = ca(color, 0.8 * f); ctx.stroke();
+      ctx.lineWidth = 1.8 * W; ctx.strokeStyle = ca(WHITE, f); ctx.stroke();
+      ctx.globalAlpha = f; const g = 20 * W; ctx.drawImage(gl, x2 - g, y2 - g, g * 2, g * 2);
       ctx.restore();
-    });
+    }, o.layer || 'front');
   }
   // projectile : draw(ctx, x, y, angle, k) ; to = [x,y] ou fonction → [x,y]
+  // o.ribbon = { color, width, len } : traînée lumineuse effilée ; o.glow = couleur du halo
   projectile(from, to, o = {}) {
     let hit = false;
-    const st = { x: from[0], y: from[1] };
-    const trail = o.trail;
+    const st = { x: from[0], y: from[1], a: 0 };
+    const trail = o.trail, rib = o.ribbon;
+    const RN = rib ? (rib.len ?? 10) : 0;
+    const rp = rib ? new Float32Array(RN * 2) : null;
+    let rc = 0, rh = 0, tick = 0;
+    if (rib) { rp[0] = from[0]; rp[1] = from[1]; rc = 1; rh = 1 % RN; }
+    const gspr = o.glow ? sprite(o.glow, 'glow') : null, gs = o.glowSize ?? 14;
     this.add(o.dur ?? 0.4, (ctx, k) => {
+      if (rib && rc > 1) drawRibbon(ctx, rp, rc, rh, RN, rib.width ?? 6, rib.color, 1);
+      if (gspr) { ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.9; ctx.drawImage(gspr, st.x - gs, st.y - gs, gs * 2, gs * 2); ctx.restore(); }
       if (o.draw) o.draw(ctx, st.x, st.y, st.a || 0, k);
     }, 'front', (k, done) => {
       const tg = typeof to === 'function' ? to() : to;
       const nx = from[0] + (tg[0] - from[0]) * k;
       const ny = from[1] + (tg[1] - from[1]) * k - Math.sin(k * Math.PI) * (o.arc ?? 30);
-      st.a = Math.atan2(ny - st.y, nx - st.x);
+      if (nx !== st.x || ny !== st.y) st.a = Math.atan2(ny - st.y, nx - st.x);
       st.x = nx; st.y = ny;
-      if (trail && (!this.low || Math.random() > 0.5)) this.emit(nx, ny, (Math.random() - 0.5) * 30, (Math.random() - 0.5) * 30, Array.isArray(trail.color) ? trail.color[Math.floor(Math.random() * trail.color.length)] : trail.color, trail.size ?? 10, trail.life ?? 0.3, { shape: trail.shape, drag: 4 });
-      if (done && !hit) { hit = true; o.onHit && o.onHit(st.x, st.y); }
+      if (rib) {
+        const li = ((rh - 1 + RN) % RN) * 2;
+        if (Math.abs(rp[li] - nx) + Math.abs(rp[li + 1] - ny) > 1.5) { rp[rh * 2] = nx; rp[rh * 2 + 1] = ny; rh = (rh + 1) % RN; if (rc < RN) rc++; }
+      }
+      tick++;
+      if (trail && tick % (trail.every ?? 1) === 0 && (!this.low || tick % 2 === 0)) this.emit(nx, ny, (Math.random() - 0.5) * 30, (Math.random() - 0.5) * 30, Array.isArray(trail.color) ? trail.color[Math.floor(Math.random() * trail.color.length)] : trail.color, trail.size ?? 10, trail.life ?? 0.3, { shape: trail.shape, drag: 4 });
+      if (done && !hit) {
+        hit = true;
+        if (rib && rc > 1) { const w = rib.width ?? 6, c = rib.color; this.add(0.16, (ctx, q) => drawRibbon(ctx, rp, rc, rh, RN, w * (1 - q * 0.6), c, 1 - q)); }
+        o.onHit && o.onHit(st.x, st.y);
+      }
     });
   }
-  custom(dur, draw, layer = 'front', upd) { return this.add(dur, draw, layer, upd); }
+  // décalque au sol qui s'estompe : 'scorch' (brûlure), 'crack' (fissures incandescentes), 'frost', 'splash', 'claw'
+  decal(x, y, o = {}) {
+    const kind = o.kind || 'scorch', r = o.r ?? 40, color = o.color || '#ff7a1a', sq = o.squash ?? 0.3, dur = o.dur ?? 1.8, cool = o.cool ?? 2.5;
+    const dark = sprite(o.dark || '#1a0a14', 'smoke'), hot = sprite(color, 'soft');
+    let geo = null, nl = 0, seg = 4;
+    if (kind === 'crack' || kind === 'frost') {
+      nl = Math.max(3, Math.round((o.n ?? 7) * (this.low ? 0.6 : 1)));
+      geo = new Float32Array(nl * (seg + 1) * 2);
+      for (let l = 0; l < nl; l++) {
+        const a = (l / nl) * TAU + (Math.random() - 0.5) * 0.6, len = r * (0.55 + Math.random() * 0.5);
+        let cx = x + Math.cos(a) * r * 0.12, cy = y + Math.sin(a) * r * 0.12 * sq;
+        for (let s = 0; s <= seg; s++) {
+          const b = l * (seg + 1) * 2 + s * 2;
+          geo[b] = cx; geo[b + 1] = cy;
+          const aa = a + (Math.random() - 0.5) * (kind === 'frost' ? 0.2 : 0.9), d = len / seg;
+          cx += Math.cos(aa) * d; cy += Math.sin(aa) * d * sq;
+        }
+      }
+    } else if (kind === 'claw') {
+      nl = o.n ?? 3; seg = 1;
+      geo = new Float32Array(nl * 4);
+      const a = o.angle ?? 0.25, len = r * 1.6;
+      for (let l = 0; l < nl; l++) { const off = (l - (nl - 1) / 2) * (o.gap ?? 9); geo[l * 4] = x - Math.cos(a) * len / 2; geo[l * 4 + 1] = y + off * sq * 1.6 - Math.sin(a) * len / 2 * sq; geo[l * 4 + 2] = x + Math.cos(a) * len / 2; geo[l * 4 + 3] = y + off * sq * 1.6 + Math.sin(a) * len / 2 * sq; }
+    }
+    const lines = (ctx) => {
+      ctx.beginPath();
+      for (let l = 0; l < nl; l++) { const b = l * (seg + 1) * 2; ctx.moveTo(geo[b], geo[b + 1]); for (let s = 1; s <= seg; s++) ctx.lineTo(geo[b + s * 2], geo[b + s * 2 + 1]); }
+    };
+    this.add(dur, (ctx, k) => {
+      const a = k < 0.03 ? k / 0.03 : k > 0.45 ? 1 - (k - 0.45) / 0.55 : 1;
+      const heat = Math.max(0, 1 - k * cool);
+      ctx.save();
+      if (kind !== 'frost' && kind !== 'splash') { ctx.globalAlpha = a * (o.alpha ?? 0.75); ctx.drawImage(dark, x - r, y - r * sq, r * 2, r * 2 * sq); }
+      if (kind === 'splash') { ctx.globalAlpha = a * 0.5; ctx.drawImage(sprite(color, 'smoke'), x - r, y - r * sq, r * 2, r * 2 * sq); }
+      if (geo) {
+        ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.globalAlpha = a;
+        lines(ctx);
+        if (kind !== 'frost') { ctx.lineWidth = o.lw ?? 2.4; ctx.strokeStyle = 'rgba(28,10,30,0.6)'; ctx.stroke(); }
+        ctx.globalCompositeOperation = 'lighter';
+        const h = kind === 'frost' ? 0.6 + 0.4 * heat : heat;
+        if (h > 0.01) {
+          ctx.lineWidth = (o.lw ?? 2.4) * 1.8; ctx.strokeStyle = ca(color, 0.5 * h); ctx.stroke();
+          ctx.lineWidth = (o.lw ?? 2.4) * 0.55; ctx.strokeStyle = ca(kind === 'frost' ? WHITE : shade(color, 0.6), 0.9 * h); ctx.stroke();
+        }
+      }
+      ctx.globalCompositeOperation = 'lighter';
+      const hh = kind === 'frost' ? a * 0.55 : heat * a * 0.8;
+      if (hh > 0.01) { ctx.globalAlpha = hh; ctx.drawImage(hot, x - r * 0.8, y - r * 0.8 * sq, r * 1.6, r * 1.6 * sq); }
+      ctx.restore();
+    }, 'back');
+  }
+  // cercle magique au sol (sprite pré-rendu, aplati et en rotation)
+  glyph(x, y, o = {}) {
+    const spr = runeSprite(o.color || '#ffd23f', o.color2 || WHITE, o.style || 'rune');
+    const r0 = o.r ?? 50, sq = o.squash ?? 0.32, spin = o.spin ?? 1.2, dur = o.dur ?? 1, rot0 = Math.random() * TAU;
+    this.add(dur, (ctx, k) => {
+      const a = k < 0.15 ? k / 0.15 : k > 0.7 ? 1 - (k - 0.7) / 0.3 : 1;
+      const r = r0 * (0.7 + 0.3 * Math.min(1, k * 5));
+      const px = typeof x === 'function' ? x() : x;
+      ctx.save(); ctx.globalAlpha = a * (o.alpha ?? 0.9) * 0.7;
+      ctx.translate(px, y); ctx.scale(1, sq); ctx.rotate(rot0 + k * dur * spin);
+      ctx.drawImage(spr, -r, -r, r * 2, r * 2);
+      ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = a * (o.alpha ?? 0.9) * 0.6;
+      ctx.drawImage(spr, -r, -r, r * 2, r * 2);
+      ctx.restore();
+    }, o.layer || 'back');
+  }
+  // assombrit le décor (sous les combattants) pour faire ressortir les gros sorts ; ne se cumule pas
+  dim(o = {}) {
+    const a1 = o.a ?? 0.35, col = o.color || '#0b0420', dur = o.dur ?? 0.8, fin = o.in ?? 0.1, fout = o.out ?? 0.35;
+    const D = this._dim;
+    if (D && D.t < D.dur && this.items.includes(D)) { D.dur = Math.max(D.dur, D.t + dur); D.a1 = Math.max(D.a1, a1); return D; }
+    const it = this.add(dur, (ctx) => {
+      const t = it.t;
+      const a = t < fin ? t / fin : t > it.dur - fout ? Math.max(0, (it.dur - t) / fout) : 1;
+      ctx.save(); ctx.globalAlpha = a * it.a1; ctx.fillStyle = it.col; ctx.fillRect(-600, -400, 2600, 1200); ctx.restore();
+    }, 'bg');
+    it.a1 = a1; it.col = col;
+    this._dim = it;
+    return it;
+  }
+  // concentration d'énergie (anticipation) : halo qui grossit, anneau qui se resserre, étincelles aspirées
+  charge(pos, o = {}) {
+    const color = o.color || '#ffffff', c2 = o.color2 || '#ffffff', R = o.r ?? 26, S = o.size ?? 14, dur = o.dur ?? 0.3, rate = o.rate ?? 1;
+    const gl = sprite(color, 'glow'), fl = sprite(c2, 'flare');
+    const P = typeof pos === 'function' ? pos : () => pos;
+    let tick = 0;
+    this.add(dur, (ctx, k) => {
+      const p = P(), x = p[0], y = p[1];
+      const s = S * (0.3 + 0.7 * k) * (1 + Math.sin(k * 44) * 0.08);
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = Math.min(1, k * 3); ctx.drawImage(gl, x - s, y - s, s * 2, s * 2);
+      ctx.globalAlpha = k * 0.9; ctx.drawImage(fl, x - s * 1.4, y - s * 1.4, s * 2.8, s * 2.8);
+      ctx.globalAlpha = 1;
+      ctx.beginPath(); ctx.arc(x, y, R * (1 - k) + 2, 0, TAU); ctx.lineWidth = 1 + k * 1.5; ctx.strokeStyle = ca(c2, 0.55 * k); ctx.stroke();
+      ctx.restore();
+    }, o.layer || 'front', () => {
+      tick++;
+      if (this.low && tick % 2) return;
+      const p = P();
+      for (let i = 0; i < rate; i++) {
+        const a = Math.random() * TAU, r = R * (0.8 + Math.random() * 0.6);
+        this.emit(p[0] + Math.cos(a) * r, p[1] + Math.sin(a) * r, -Math.cos(a) * r * 5, -Math.sin(a) * r * 5, Math.random() < 0.5 ? color : c2, 2.5 + Math.random() * 2, 0.2, { shape: 'spark', drag: 0 });
+      }
+    });
+  }
 
   text(x, y, str, style = 'dmg') {
     const S = TEXT_STYLE[style] || TEXT_STYLE.dmg;
@@ -215,7 +674,7 @@ export class FX {
           this.px[i] = this.px[j]; this.py[i] = this.py[j]; this.vx[i] = this.vx[j]; this.vy[i] = this.vy[j];
           this.life[i] = this.life[j]; this.max[i] = this.max[j]; this.size[i] = this.size[j]; this.size1[i] = this.size1[j];
           this.grav[i] = this.grav[j]; this.drag[i] = this.drag[j]; this.rot[i] = this.rot[j]; this.vr[i] = this.vr[j];
-          this.alpha[i] = this.alpha[j]; this.kind[i] = this.kind[j]; this.col[i] = this.col[j];
+          this.alpha[i] = this.alpha[j]; this.kind[i] = this.kind[j]; this.col[i] = this.col[j]; this.spr[i] = this.spr[j]; this.sq[i] = this.sq[j];
         }
         continue;
       }
@@ -240,41 +699,66 @@ export class FX {
   }
 
   drawItems(ctx, layer) {
-    for (const it of this.items) if (it.layer === layer && it.draw) it.draw(ctx, Math.min(1, it.t / it.dur));
+    const its = this.items;
+    if (layer === 'back') for (let i = 0; i < its.length; i++) { const it = its[i]; if (it.layer === 'bg' && it.draw) it.draw(ctx, Math.min(1, it.t / it.dur)); }
+    for (let i = 0; i < its.length; i++) { const it = its[i]; if (it.layer === layer && it.draw) it.draw(ctx, Math.min(1, it.t / it.dur)); }
   }
   drawParticles(ctx) {
-    // passe normale (fumée, débris)
-    for (let i = 0; i < this.n; i++) {
+    const n = this.n;
+    if (!n) return;
+    const m = ctx.getTransform();
+    const A = m.a, Bm = m.b, C = m.c, D = m.d, E = m.e, F = m.f;
+    // passe normale (fumée, débris, feuilles, pétales)
+    for (let i = 0; i < n; i++) {
       const kd = this.kind[i];
-      if (kd !== 3 && kd !== 4) continue;
+      if (!NORMAL[kd]) continue;
       const k = this.life[i] / this.max[i];
-      const a = this.alpha[i] * (1 - k);
+      let a = this.alpha[i] * (1 - k);
+      if (kd === 4 && k < 0.12) a *= k / 0.12;
+      if (a <= 0.01) continue;
       const s = this.size[i] + (this.size1[i] - this.size[i]) * k;
+      const x = this.px[i], y = this.py[i];
       ctx.globalAlpha = a;
-      if (kd === 4) ctx.drawImage(glowSprite(this.col[i], 'smoke'), this.px[i] - s, this.py[i] - s, s * 2, s * 2);
-      else {
-        ctx.save(); ctx.translate(this.px[i], this.py[i]); ctx.rotate(this.rot[i]);
-        ctx.fillStyle = this.col[i]; ctx.fillRect(-s / 2, -s / 2, s, s * 0.7);
-        ctx.restore();
+      if (kd === 4) {
+        ctx.setTransform(A, Bm, C, D, A * x + C * y + E, Bm * x + D * y + F);
+        const sy = s * this.sq[i];
+        ctx.drawImage(this.spr[i], -s, -sy, s * 2, sy * 2);
+      } else {
+        const r = this.rot[i], cs = Math.cos(r), sn = Math.sin(r);
+        ctx.setTransform(A * cs + C * sn, Bm * cs + D * sn, C * cs - A * sn, D * cs - Bm * sn, A * x + C * y + E, Bm * x + D * y + F);
+        if (kd === 3) { ctx.fillStyle = this.col[i]; ctx.fillRect(-s / 2, -s * 0.35, s, s * 0.7); }
+        else { const fl = Math.max(0.2, Math.abs(Math.cos(this.life[i] * 8 + i))); ctx.drawImage(this.spr[i], -s * fl, -s, s * 2 * fl, s * 2); }
       }
     }
     ctx.globalCompositeOperation = 'lighter';
-    for (let i = 0; i < this.n; i++) {
+    for (let i = 0; i < n; i++) {
       const kd = this.kind[i];
-      if (kd === 3 || kd === 4) continue;
+      if (NORMAL[kd]) continue;
       const k = this.life[i] / this.max[i];
-      const a = this.alpha[i] * (k < 0.1 ? k * 10 : 1 - (k - 0.1) / 0.9);
+      let a = this.alpha[i] * (k < 0.1 ? k * 10 : 1 - (k - 0.1) / 0.9);
+      if (kd === 7) a *= 0.55 + 0.45 * Math.sin(this.life[i] * 26 + i * 1.7);
+      if (a <= 0.01) continue;
       const s = this.size[i] + (this.size1[i] - this.size[i]) * k;
-      ctx.globalAlpha = Math.max(0, a);
-      if (kd === 2) {
-        ctx.beginPath(); ctx.moveTo(this.px[i], this.py[i]); ctx.lineTo(this.px[i] - this.vx[i] * 0.05, this.py[i] - this.vy[i] * 0.05);
-        ctx.lineWidth = s * 0.35; ctx.strokeStyle = this.col[i]; ctx.lineCap = 'round'; ctx.stroke();
+      const x = this.px[i], y = this.py[i];
+      ctx.globalAlpha = a > 1 ? 1 : a;
+      if (kd === 2 || kd === 8) {
+        const vx = this.vx[i], vy = this.vy[i], sp = Math.hypot(vx, vy);
+        const cs = sp > 1e-3 ? vx / sp : 1, sn = sp > 1e-3 ? vy / sp : 0;
+        const len = s * (kd === 2 ? 0.8 : 1.1) + sp * 0.045, w = s * (kd === 2 ? 0.55 : 0.9);
+        ctx.setTransform(A * cs + C * sn, Bm * cs + D * sn, C * cs - A * sn, D * cs - Bm * sn, A * x + C * y + E, Bm * x + D * y + F);
+        ctx.drawImage(this.spr[i], -len, -w / 2, len * 1.3, w);
+      } else if (kd === 1 || kd === 6 || kd === 9 || kd === 13) {
+        const r = kd === 1 ? this.rot[i] * 0.3 : kd === 13 ? Math.sin(this.rot[i]) * 0.3 : kd === 6 ? this.rot[i] * 0.15 : this.rot[i];
+        const cs = Math.cos(r), sn = Math.sin(r);
+        ctx.setTransform(A * cs + C * sn, Bm * cs + D * sn, C * cs - A * sn, D * cs - Bm * sn, A * x + C * y + E, Bm * x + D * y + F);
+        ctx.drawImage(this.spr[i], -s, -s, s * 2, s * 2);
       } else {
-        const spr = glowSprite(this.col[i], kd === 1 ? 'star' : kd === 5 ? 'bubble' : 'glow');
-        if (kd === 1) { ctx.save(); ctx.translate(this.px[i], this.py[i]); ctx.rotate(this.rot[i] * 0.3); ctx.drawImage(spr, -s, -s, s * 2, s * 2); ctx.restore(); }
-        else ctx.drawImage(spr, this.px[i] - s, this.py[i] - s, s * 2, s * 2);
+        ctx.setTransform(A, Bm, C, D, A * x + C * y + E, Bm * x + D * y + F);
+        const sy = s * this.sq[i];
+        ctx.drawImage(this.spr[i], -s, -sy, s * 2, sy * 2);
       }
     }
+    ctx.setTransform(m);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
   }

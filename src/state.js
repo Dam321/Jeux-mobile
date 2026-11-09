@@ -103,6 +103,7 @@ export function defaultState() {
     guilds: null,
     event: { week: '', pts: 0, acc: {}, claimed: [], shop: {} },
     bestiary: {}, bestiaryClaimed: {},
+    altar: { lvl: 0 },
     dungeons: Object.fromEntries(DUNGEONS.map((d) => [d.id, { lvl: 1, keys: DUNGEON_FREE_KEYS, buys: 0 }])),
     arena: { tickets: ARENA_FREE_TICKETS, buys: 0, wins: 0, claimedKey: '', shop: {}, bots: null, order: null, season: weekKey(), best: ARENA_SIZE },
     market: null,

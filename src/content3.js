@@ -91,6 +91,8 @@ export const TITLES = [
   { id: 'unstoppable', name: 'Inarrêtable', r: 7, hp: 6, src: 'Tour des Défis étage 250' },
   { id: 'patron', name: 'Mécène royal', r: 7, hp: 6, src: 'Récompense de fidélité' },
   { id: 'emperor', name: 'Empereur des Chats', r: 8, hp: 8, src: 'VIP 15' },
+  { id: 'catGod', name: 'Divinité Féline', r: 8, hp: 12, src: 'VIP 20' },
+  { id: 'bastet', name: 'Élu de Bastet', r: 7, hp: 6, src: 'Autel de Bastet niveau 50' },
   { id: 'primordial', name: 'Primordial', r: 8, hp: 8, src: 'Posséder un chaton Primordial' },
 ];
 export const TITLE_BY_ID = Object.fromEntries(TITLES.map((t) => [t.id, t]));

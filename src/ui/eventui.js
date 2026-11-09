@@ -8,6 +8,28 @@ import {
   BESTIARY_TIERS, BESTIARY_BOSS_TIERS, BESTIARY_PCT, tiersOf,
 } from '../event.js';
 import { MONSTER_KINDS, BOSS_KIND_LIST, monsterInfo } from '../gfx/bestiary.js';
+import { altarCost, altarCostN, altarMilestone, ALTAR_PCT } from '../altar.js';
+
+// Autel de Bastet : progression infinie en gemmes
+export const altarPanel = {
+  title: 'Autel de Bastet',
+  render(ui, g) {
+    const st = g.st, A = st.altar, lvl = A.lvl || 0;
+    const c1 = altarCost(lvl), c10 = altarCostN(lvl, 10);
+    let next = lvl + 1; while (!altarMilestone(next)) next++;
+    return h('div.col', null,
+      h('div.altar', null,
+        h('div.altar-glow'), h('div.altar-statue', { html: icon('altar') }),
+        h('div.altar-txt', null, h('small', null, 'NIVEAU'), h('b', null, lvl), h('em', null, `+${lvl * ALTAR_PCT} % ATQ et PV pour toujours`))),
+      h('p.small.center', null, 'Offrez des gemmes à Bastet : chaque niveau donne +1 % d\'ATQ et +1 % de PV, sans limite. Tous les 10 niveaux, un trésor (clé de relique + fragments d\'artefact).'),
+      h('div.btn-pair', null,
+        h('button.btn.gold', { onclick: () => g.altarOffer(1) }, h('span', null, 'Offrande'), h('small', { html: icon('gems') + ' ' + fmt(c1) })),
+        h('button.btn.purple', { onclick: () => g.altarOffer(10) }, h('span', null, 'x10'), h('small', { html: icon('gems') + ' ' + fmt(c10) }))),
+      h('div.milestone', null, h('b', null, `Prochain trésor : niveau ${next}`), chips(ui, g, altarMilestone(next))),
+      h('p.small.muted.center', null, `Vos gemmes : ${fmt(st.res.gems)} · le coût augmente de 7,5 % par niveau`),
+    );
+  },
+};
 
 const chips = (ui, g, r) => h('div.rewards.sm', null, g.previewRewards(r).map((x) => ui.rewardChip(x)));
 

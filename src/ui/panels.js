@@ -28,7 +28,7 @@ import { monsterPortrait } from '../gfx/bestiary.js';
 import { resIcon, slotName } from './ui.js';
 import { classPanel } from './classui.js';
 import { guildPanel } from './guildui.js';
-import { eventPanel, bestiaryPanel } from './eventui.js';
+import { eventPanel, bestiaryPanel, altarPanel } from './eventui.js';
 import { adaptBase } from '../classes.js';
 
 const rr = (r) => ({ '--rc': RARITIES[r].color, '--rd': RARITIES[r].dark });
@@ -914,4 +914,4 @@ const settings = {
   },
 };
 
-export const PANELS = { hero, kittens, atelier, combat, market, shop, quests, ads, firstRecharge, settings, guild: guildPanel, event: eventPanel, bestiary: bestiaryPanel };
+export const PANELS = { hero, kittens, atelier, combat, market, shop, quests, ads, firstRecharge, settings, guild: guildPanel, event: eventPanel, bestiary: bestiaryPanel, altar: altarPanel };

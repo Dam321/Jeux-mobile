@@ -7,6 +7,7 @@ import {
 } from './content.js';
 import { classOf, specOf } from './classes.js';
 import { guildFx } from './guild.js';
+import { ALTAR_PCT } from './altar.js';
 import { bestiaryTotal, BESTIARY_PCT } from './event.js';
 import { ALL_BOSSES } from './content.js';
 import { COSTUMES3, ARTIFACT_BY_ID, artifactBonus, artifactSlots, AURA_BY_ID, TITLE_BY_ID, FRAME_BY_ID } from './content3.js';
@@ -106,6 +107,9 @@ export function computeStats(st) {
   // bestiaire : chaque palier de chasse atteint compte pour toujours
   const bt = bestiaryTotal(st, (k) => ALL_BOSSES.includes(k));
   atkPct += bt * BESTIARY_PCT; hpPct += bt * BESTIARY_PCT;
+  // Autel de Bastet
+  const al = (st.altar && st.altar.lvl) || 0;
+  atkPct += al * ALTAR_PCT; hpPct += al * ALTAR_PCT;
   // classe et spécialisation
   const C = classOf(st), SP = specOf(st);
   for (const fx of [C && C.base, SP && SP.fx]) {
