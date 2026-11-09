@@ -626,7 +626,7 @@ export class FX {
     const it = this.add(dur, (ctx) => {
       const t = it.t;
       const a = t < fin ? t / fin : t > it.dur - fout ? Math.max(0, (it.dur - t) / fout) : 1;
-      ctx.save(); ctx.globalAlpha = a * it.a1; ctx.fillStyle = it.col; ctx.fillRect(-600, -400, 2600, 1200); ctx.restore();
+      ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = a * it.a1; ctx.fillStyle = it.col; ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height); ctx.restore();
     }, 'bg');
     it.a1 = a1; it.col = col;
     this._dim = it;

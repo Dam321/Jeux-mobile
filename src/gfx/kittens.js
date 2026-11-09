@@ -189,18 +189,23 @@ function toon(c, fn, base, o = {}, marks) {
 }
 // toon sur une liste de points (lisse ou polygone)
 function tp(c, pts, base, o = {}, marks) {
+  if (base === GOLD && !o.tint && o.metal !== false) o = { ...o, ...METAL, hi: o.hi === 0 ? 0 : METAL.hi };
   const b = bbox(pts);
   return toon(c, (p) => (o.poly ? poly(p, pts) : smooth(p, pts, true, o.tension ?? 0.5)), base, { cx: b.cx, cy: b.cy, k: b.k, ...o }, marks);
 }
 function te(c, x, y, rx, ry, base, o = {}, marks) {
   return toon(c, (p) => E(p, x, y, rx, ry, o.rot || 0), base, { cx: x, cy: y, k: Math.max(rx, ry), ...o }, marks);
 }
+// or « métal » : ombre chaude, reflet fort, rebond doré
+const METAL = { tint: '#e3a04c', hi: 0.5, depth: 0.26, bounce: '#fff3b0' };
 // cel() de draw.js sur une liste de points
 function cp(c, pts, base, o = {}) {
+  if (base === GOLD && o.metal !== false) return tp(c, pts, base, { lw: LW2, ...o, ...METAL, hi: o.hi === 0 ? 0 : METAL.hi });
   const b = bbox(pts);
   cel(c, (cc) => (o.poly ? poly(cc, pts) : smooth(cc, pts, true, o.tension ?? 0.5)), base, { cx: b.cx, cy: b.cy, size: b.k, lw: o.lw ?? LW2, ...o });
 }
 function ce(c, x, y, rx, ry, base, o = {}) {
+  if (base === GOLD && o.metal !== false) return te(c, x, y, rx, ry, base, { lw: LW2, ...o, ...METAL });
   cel(c, (cc) => ell(cc, x, y, rx, ry, o.rot || 0), base, { cx: x, cy: y, size: Math.max(rx, ry), lw: o.lw ?? LW2, ...o });
 }
 // union de disques/ellipses (fourrure, nuages, plumes) : contour unique
@@ -2362,11 +2367,17 @@ function norm(def) {
   S.face = { x: 7, y: 1, sep: 12, rx: 7.6, ry: 9.2, nx: 1, ny: 9.5, mouth: 'w', style: 'round', eye: '#46c46a', ...(raw.face || {}) };
   S.legW = S.legW || 8.5; S.pawK = S.pawK || 1;
   if (S.tail === undefined) S.tail = { ctrl: [[0, 0], [-10, -3], [-16, -14], [-13, -26]], w: [4.8, 4.2] };
+  if (S.tail && S.tail.ctrl && S.tail.bendK == null) {
+    // courbure plus douce pour les longues queues (panache de l'écureuil…)
+    let len = 0; const q = S.tail.ctrl; for (let i = 1; i < q.length; i++) len += Math.hypot(q[i][0] - q[i - 1][0], q[i][1] - q[i - 1][1]);
+    S.tail = { ...S.tail, bendK: 0.75 * Math.min(1, 38 / len) };
+  }
   layout(S);
   // pivots des oreilles (milieu de la base) et pointes (éclats de rareté)
   S.earPiv = [-1, 1].map((side) => { const g = earGeo(S, side); return [(g.b1[0] + g.b2[0]) / 2 * 0.8, (g.b1[1] + g.b2[1]) / 2 * 0.8]; });
   const hs = S.head.s, tips = S.ears.type === 'none' ? [] : [-1, 1].map((side) => earGeo(S, side).tip);
-  S.glintPts = [...tips.map(([x, y]) => [S.hx + x * hs, S.hy + y * hs, 1]), [S.hx - S.head.rx * 0.62 * hs, S.hy - S.head.ry * 0.62 * hs, 1], [S.body.x - (S.body.rx || 12) * 0.3, S.body.y - (S.body.ry || 12) * 0.8, 0], ...(S.glints || []).map(([x, y]) => [x, y, 0])];
+  const F = S.face, eyeK = def.r >= 3 && !S.noFace ? [[S.hx + (F.x + F.sep - F.rx * 0.32) * hs, S.hy + (F.y - F.ry * 0.38) * hs, 2], [S.hx + (F.x - F.sep - F.rx * 0.32) * hs, S.hy + (F.y - F.ry * 0.38) * hs, 2]] : [];
+  S.glintPts = [...eyeK, ...tips.map(([x, y]) => [S.hx + x * hs, S.hy + y * hs, 1]), [S.hx - S.head.rx * 0.62 * hs, S.hy - S.head.ry * 0.62 * hs, 1], [S.body.x - (S.body.rx || 12) * 0.3, S.body.y - (S.body.ry || 12) * 0.8, 0], ...(S.glints || []).map(([x, y]) => [x, y, 0])];
   S.mouthPos = [S.face.x + S.face.nx, S.face.y + S.face.ny + 2.6];
   // encre des traits du visage : claire sur les pelages sombres (yeux fermés, bouche lisibles)
   const hf = S.headFur || S.fur;
@@ -2455,11 +2466,6 @@ function layout(S) {
 const BUILT = new Map();
 const TAIL_BENDS = [-1, -0.5, 0, 0.5, 1];
 const HEAD_BOX = [-100, -150, 200, 210];
-function boxOf(list) {
-  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
-  for (const s of list) if (s) { x0 = Math.min(x0, s.x0); y0 = Math.min(y0, s.y0); x1 = Math.max(x1, s.x0 + s.w); y1 = Math.max(y1, s.y0 + s.h); }
-  return { x0, y0, w: x1 - x0, h: y1 - y0 };
-}
 // keep = false : construction temporaire (images d'interface), non conservée en mémoire
 function built(id, keep = true) {
   let b = BUILT.get(id);
@@ -2533,7 +2539,7 @@ function ensureFull(b) {
     for (const v of FACES) if (v !== 'open') R.faces[v] = makeSprite(x0, y0, w, hh, (c) => face(c, S, v), RES_V);
   } else for (const v of FACES) R.faces[v] = null;
   if (S.tail && !S.tail.draw) {
-    const t = R.tails[2], TB = [t.x0 - 24, t.y0 - 24, t.w + 48, t.h + 48];
+    const t = R.tails[2], m = Math.max(24, Math.max(t.w, t.h) * 0.75), TB = [t.x0 - m, t.y0 - m, t.w + m * 2, t.h + m * 2];
     for (const i of [0, 1, 3, 4]) R.tails[i] = sprite(...TB, (c) => paintTail(c, S, TAIL_BENDS[i]), RES_V);
   }
 }
@@ -2754,7 +2760,7 @@ export class KittenRig {
   }
   // ---------------------------------------------------------------- pose de l'image
   _pose(st, k) {
-    const S = this.S, Q = this.Q, t = this.t + this.phase, B = S.body, P = this.P;
+    const S = this.S, Q = this.Q, t = this.t + this.phase, P = this.P;
     Q.px = 0; Q.py = 0; Q.rt = 0; Q.pvx = 0; Q.pvy = S.pivotY; Q.sx = 1; Q.sy = 1; Q.spin = 1;
     Q.tilt = 0; Q.hdx = 0; Q.hdy = 0; Q.hsx = 1; Q.hsy = 1; Q.ear0 = 0; Q.ear1 = 0;
     Q.tailS = 1; Q.legA = 0; Q.legB = 0; Q.lick = 0; Q.lickY = 0; Q.duck = 0;
@@ -2972,7 +2978,7 @@ export class KittenRig {
       if (f) dI(c, f);
       if (R.hFront) dI(c, R.hFront);
     }
-    if (this.shineD > -1e8 && R.clip) { const hk = hs * Q.hsx; this._shine(c, R.clip.head, (this.shineD - S.hx - Q.hdx - 0.6 * (hy + nk - nk)) / hs * Math.sign(hk), 26 / hs); }
+    if (this.shineD > -1e8 && R.clip) { const hk = hs * Q.hsx; this._shine(c, R.clip.head, (this.shineD - S.hx - Q.hdx - 0.6 * hy) / hs * Math.sign(hk), 26 / hs); }
     if (!bare) {
       if (S.fxHead) S.fxHead(c, R, this.P);
       if (this.flash > 0) { c.globalCompositeOperation = 'lighter'; c.globalAlpha *= clamp(this.flash) * 0.55; if (fast) dI(c, R.headFull); else { dI(c, R.skull); if (f) dI(c, f); } }
@@ -3085,7 +3091,8 @@ export class KittenRig {
     // éclat ponctuel sur un bord (oreille, tête, dos)
     if (this.glintS >= 0 && !this.still) {
       const pts = S.glintPts, g = pts[this.glintI % pts.length], u = this.glintS / 0.55, a = Math.sin(u * Math.PI);
-      addSpark(ctx, g[0] + cx * (g[2] ? 1 : 0.8), g[1] + (g[2] ? cy : Q.py), (4 + S.r * 0.7) * a, this.cGlint, a, u * 1.2);
+      if (g[2] === 2) { if (!this.P.closed && Q.hsx > 0 && Q.spin > 0) addSpark(ctx, g[0] + cx, g[1] + cy, (3 + S.r * 0.45) * a, '#ffffff', a, u * 1.5); } // « kira » dans l'œil
+      else addSpark(ctx, g[0] + cx * (g[2] ? 1 : 0.8), g[1] + (g[2] ? cy : Q.py), (4 + S.r * 0.7) * a, this.cGlint, a, u * 1.2);
     }
     // gerbe d'étincelles (scène « sparkle », victoire)
     if (Q.burst >= 0) {
@@ -3175,10 +3182,11 @@ export class KittenRig {
       ctx.globalAlpha = ga;
     }
     ctx.scale(scale * facing, scale);
-    this._fxUnder(ctx, Q, t);
+    const bare = !!anim._bare; // interne : silhouette seule (cadrage des images d'interface)
+    if (!bare) this._fxUnder(ctx, Q, t);
     this.shineD = this.sweepS >= 0 && !this.still ? lerp(-150, 95, ease(this.sweepS / 0.8)) : -1e9;
-    this._paint(ctx, Q, false);
-    this._fxOver(ctx, Q, t);
+    this._paint(ctx, Q, bare);
+    if (!bare) this._fxOver(ctx, Q, t);
     // flash d'impact (additif)
     if (this.flash > 0) addGlow(ctx, S.body.x + 6, (S.hy + S.body.y) / 2, this.height * 0.62, anim.flashColor || '#ffffff', clamp(this.flash) * 0.85);
     ctx.restore();
@@ -3208,14 +3216,26 @@ export function kittenPortraitURL(id, size = 96) {
   URLS.set(key, url);
   return url;
 }
-// Corps entier (pose de repos)
+// Corps entier (pose de repos). Cadré sur la silhouette (sans les effets) pour que les raretés hautes
+// ne paraissent pas plus petites à cause de leurs auras ; les effets débordants s'estompent aux bords.
 export function kittenFullURL(id, size = 120) {
   const key = 'f' + id + ':' + size;
   if (URLS.has(key)) return URLS.get(key);
   const rig = stillRig(id);
-  const res = Math.max(1.6, size / 80);
-  const s = makeSprite(-100, -150, 200, 160, (c) => rig.draw(c, 0, 0, 1, 1, { state: 'idle' }), res);
-  const url = spriteURL(s, size, 0.03);
+  const core = makeSprite(-100, -150, 200, 160, (c) => rig.draw(c, 0, 0, 1, 1, { state: 'idle', noShadow: true, _bare: true }), 0.75);
+  const b = opaqueBounds(core.c), k = 1 / 0.75;
+  const w = b.w * k, h = b.h * k + 5, x0 = -100 + b.x * k, y0 = -150 + b.y * k;
+  const side = Math.max(w, h) * 1.1 + 6, cx = x0 + w / 2, cy = y0 + h / 2;
+  const res = size / side;
+  const s = makeSprite(cx - side / 2, cy - side / 2, side, side, (c) => rig.draw(c, 0, 0, 1, 1, { state: 'idle' }), res);
+  const c = s.c.getContext('2d'), W = s.c.width, H = s.c.height;
+  c.setTransform(1, 0, 0, 1, 0, 0); c.globalCompositeOperation = 'destination-in';
+  for (const [x1, y1] of [[W, 0], [0, H]]) {
+    const g = c.createLinearGradient(0, 0, x1, y1);
+    g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(0.05, 'rgba(0,0,0,1)'); g.addColorStop(0.95, 'rgba(0,0,0,1)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+    c.fillStyle = g; c.fillRect(0, 0, W, H);
+  }
+  const url = s.c.toDataURL('image/png');
   URLS.set(key, url);
   return url;
 }
