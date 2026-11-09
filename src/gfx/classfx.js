@@ -98,7 +98,7 @@ export function classFinisher(B, u, tg, M, hitFn) {
         fx.claw(gx, gy - 34, { n: 3, gap: 14, r: 60, color: '#ff9a5a', under: A, width: 12, angle: -0.9, arc: 2, dur: 0.3, dir: f });
         fx.burst(gx, gy - 6, { count: 26, color: ['#8a5a3a', '#c9a27a', C], speed: 260, up: 160, size: 7, life: 0.8, shape: 'debris', gravity: 600 });
         fx.burst(gx, gy - 8, { count: 16, color: [C, '#ffd23f'], speed: 120, size: 3, life: 1.2, shape: 'ember', up: 90, drag: 1.2, spread: 80 });
-        for (let i = 0; i < 6; i++) fx.emit(gx + (Math.random() - 0.5) * 120, gy, 0, -60 - Math.random() * 60, '#8a6a5a', 10, 0.8, { shape: 'smoke', endSize: 24, drag: 1, alpha: 0.6 });
+        for (let i = 0; i < (fx.low ? 2 : 4); i++) fx.emit(gx + (Math.random() - 0.5) * 120, gy, 0, -60 - Math.random() * 60, '#8a6a5a', 9, 0.8, { shape: 'smoke', endSize: 20, drag: 1, alpha: 0.6 });
         all(M.ult.mult);
         if (M.ult.heal) { B.heal(u, M.ult.heal); for (const e of foes().slice(0, 3)) soulTo(B, e.x, e.y - e.height * 0.5, u, '#ff4d3a'); }
         sfx('thunder');

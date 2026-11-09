@@ -149,6 +149,11 @@ function build(color, kind) {
       c = cv(4, 32); g = c.getContext('2d');
       g.fillStyle = lin(g, 0, 0, 0, 32, [0, ca(color, 0), 0.22, ca(color, 0.3), 0.42, ca(color, 0.85), 0.5, ca(WHITE, 1), 0.58, ca(color, 0.85), 0.78, ca(color, 0.3), 1, ca(color, 0)]); g.fillRect(0, 0, 4, 32);
       break;
+    case 'glowL': case 'softL': // grandes versions (256 px), dessinées sans lissage : 3x moins cher en rendu logiciel
+      c = cv(256, 256); g = c.getContext('2d');
+      g.fillStyle = rad(g, 128, 128, 128, kind === 'glowL' ? [0, ca(WHITE, 1), 0.22, ca(color, 0.88), 0.55, ca(color, 0.28), 1, ca(color, 0)] : [0, ca(color, 0.7), 0.45, ca(color, 0.28), 1, ca(color, 0)]);
+      g.fillRect(0, 0, 256, 256);
+      break;
     default: // glow
       c = cv(64, 64); g = c.getContext('2d');
       g.fillStyle = rad(g, 32, 32, 32, [0, ca(WHITE, 1), 0.22, ca(color, 0.88), 0.55, ca(color, 0.28), 1, ca(color, 0)]); g.fillRect(0, 0, 64, 64);
@@ -160,6 +165,43 @@ export function sprite(color, kind = 'glow') {
   if (!m) { m = new Map(); SPR.set(kind, m); }
   let c = m.get(color);
   if (!c) { c = build(color, kind); m.set(color, c); }
+  return c;
+}
+// fissures pré-rendues (vue de dessus, aplaties au dessin) : géométrie déterministe par variante
+function crackGeo(kind, v) {
+  let sd = 1234 + v * 7919 + (kind === 'frost' ? 31 : kind === 'claw' ? 57 : 0);
+  const rnd = () => { sd = (sd * 16807) % 2147483647; return sd / 2147483647; };
+  const L = [];
+  if (kind === 'claw') {
+    for (let l = 0; l < 4; l++) { const off = (l - 1.5) * 0.24; L.push([[-0.85, off - 0.18], [0.85, off + 0.18]]); }
+    return L;
+  }
+  const nl = kind === 'frost' ? 10 : 8;
+  for (let l = 0; l < nl; l++) {
+    const a = (l / nl) * TAU + (rnd() - 0.5) * 0.6, len = 0.6 + rnd() * 0.38;
+    let cx = Math.cos(a) * 0.1, cy = Math.sin(a) * 0.1;
+    const pts = [[cx, cy]];
+    for (let sg = 0; sg < 4; sg++) { const aa = a + (rnd() - 0.5) * (kind === 'frost' ? 0.25 : 0.9); cx += Math.cos(aa) * len / 4; cy += Math.sin(aa) * len / 4; pts.push([cx, cy]); }
+    L.push(pts);
+    if (kind !== 'frost' && rnd() < 0.5) { const p = pts[2], ba = a + (rnd() < 0.5 ? -0.8 : 0.8); L.push([p, [p[0] + Math.cos(ba) * 0.2, p[1] + Math.sin(ba) * 0.2]]); }
+  }
+  return L;
+}
+export function crackSprite(kind, v, color, dark) {
+  const key = 'crack:' + kind + v + color + (dark ? 'd' : 'g');
+  let c = SPR.get(key);
+  if (c) return c;
+  c = cv(256, 256);
+  const g = c.getContext('2d');
+  g.translate(128, 128); g.scale(120, 120); g.lineCap = 'round'; g.lineJoin = 'round';
+  g.beginPath();
+  for (const pts of crackGeo(kind, v)) { g.moveTo(pts[0][0], pts[0][1]); for (let i = 1; i < pts.length; i++) g.lineTo(pts[i][0], pts[i][1]); }
+  if (dark) { g.lineWidth = 0.075; g.strokeStyle = ca(color, 0.85); g.stroke(); }
+  else {
+    g.lineWidth = 0.1; g.strokeStyle = ca(color, 0.45); g.stroke();
+    g.lineWidth = 0.035; g.strokeStyle = ca(kind === 'frost' ? WHITE : shade(color, 0.65), 1); g.stroke();
+  }
+  SPR.set(key, c);
   return c;
 }
 // cercle magique pré-rendu (dessiné ensuite aplati au sol et en rotation)
@@ -237,13 +279,11 @@ function ribbonPath(ctx, rp, rc, start, RN, hw) {
   }
   ctx.closePath();
 }
-function drawRibbon(ctx, rp, rc, rh, RN, width, color, a) {
+function drawRibbon(ctx, rp, rc, rh, RN, width, color, a, low) {
   const start = (rh - rc + RN) % RN;
   ctx.save();
-  ribbonPath(ctx, rp, rc, start, RN, width * 0.5); ctx.fillStyle = ca(color, 0.42 * a); ctx.fill();
-  ctx.globalCompositeOperation = 'lighter';
-  ribbonPath(ctx, rp, rc, start, RN, width * 0.32); ctx.fillStyle = ca(color, 0.55 * a); ctx.fill();
-  ribbonPath(ctx, rp, rc, start, RN, width * 0.14); ctx.fillStyle = ca(WHITE, 0.9 * a); ctx.fill();
+  ribbonPath(ctx, rp, rc, start, RN, width * 0.5); ctx.fillStyle = ca(color, 0.6 * a); ctx.fill();
+  if (!low) { ctx.globalCompositeOperation = 'lighter'; ribbonPath(ctx, rp, rc, start, RN, width * 0.17); ctx.fillStyle = ca(WHITE, 0.9 * a); ctx.fill(); }
   ctx.restore();
 }
 function polyPath(ctx, p, n) { ctx.moveTo(p[0], p[1]); for (let i = 1; i <= n; i++) ctx.lineTo(p[i * 2], p[i * 2 + 1]); }
@@ -262,7 +302,7 @@ export class FX {
     this.low = false;
     this._dim = null;
   }
-  clear() { this.n = 0; this.items = []; this.texts = []; this._dim = null; }
+  clear() { this.n = 0; this.items = []; for (const x of this.texts) freeText(x); this.texts = []; this._dim = null; }
 
   emit(x, y, vx, vy, color, size, life, o = {}) {
     if (this.n >= MAXP) return -1;
@@ -355,10 +395,9 @@ export class FX {
       const r = r0 + (r1 - r0) * e, a = 1 - k;
       ctx.save();
       ell(ctx, x, y, r, r * sq);
-      ctx.lineWidth = w * 1.4 * a + 1; ctx.strokeStyle = ca(color, 0.4 * a); ctx.stroke();
+      ctx.lineWidth = w * a + 1; ctx.strokeStyle = ca(color, 0.6 * a); ctx.stroke();
       ctx.globalCompositeOperation = 'lighter';
-      ctx.lineWidth = w * 2.6 * a + 1; ctx.strokeStyle = ca(color, 0.18 * a); ctx.stroke();
-      ctx.lineWidth = w * a + 1; ctx.strokeStyle = ca(color, 0.75 * a); ctx.stroke();
+      ctx.lineWidth = w * 1.9 * a + 1; ctx.strokeStyle = ca(color, 0.3 * a); ctx.stroke();
       ctx.lineWidth = Math.max(0.8, w * 0.3 * a); ctx.strokeStyle = ca(WHITE, 0.9 * a * a); ctx.stroke();
       ctx.restore();
     }, o.layer || 'back');
@@ -368,25 +407,25 @@ export class FX {
     const r1 = o.r ?? 80, color = o.color || '#ffffff', c2 = o.color2 || color, w = o.width ?? 8, sq = o.squash ?? 1;
     this.add(o.dur ?? 0.4, (ctx, k) => {
       const e = 1 - Math.pow(1 - k, 2.2), r = r1 * (0.12 + 0.88 * e), a = 1 - k;
-      ctx.save();
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
       ell(ctx, x, y, r, r * sq);
-      ctx.lineWidth = w * 0.9 * a + 0.5; ctx.strokeStyle = ca(color, 0.35 * a); ctx.stroke();
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.lineWidth = w * 2.4 * a + 0.5; ctx.strokeStyle = ca(color, 0.16 * a); ctx.stroke();
+      ctx.lineWidth = w * 1.6 * a + 0.5; ctx.strokeStyle = ca(color, 0.32 * a); ctx.stroke();
       ctx.lineWidth = w * 0.45 * a + 0.6; ctx.strokeStyle = ca(WHITE, 0.85 * a); ctx.stroke();
-      ell(ctx, x, y, r * 0.92, r * 0.92 * sq);
-      ctx.lineWidth = w * 0.5 * a + 0.5; ctx.strokeStyle = ca(c2, 0.6 * a); ctx.stroke();
+      if (!this.low) { ell(ctx, x, y, r * 0.92, r * 0.92 * sq); ctx.lineWidth = w * 0.5 * a + 0.5; ctx.strokeStyle = ca(c2, 0.6 * a); ctx.stroke(); }
       ctx.restore();
     }, o.layer || 'front');
   }
   // éclair de lumière (sprite)
   blast(x, y, o = {}) {
     const r1 = o.r ?? 60, sq = o.squash ?? 1, al = o.alpha ?? 1;
-    const spr = sprite(o.color || '#ffb52e', o.soft ? 'soft' : 'glow');
+    if (r1 <= 40 && sq === 1) { this.emit(x, y, 0, 0, o.color || '#ffb52e', r1 * 0.45, o.dur ?? 0.45, { shape: o.soft ? 'soft' : 'glow', drag: 0, endSize: r1, alpha: al }); return; }
+    const big = r1 > 55;
+    const spr = sprite(o.color || '#ffb52e', (o.soft ? 'soft' : 'glow') + (big ? 'L' : ''));
     this.add(o.dur ?? 0.45, (ctx, k) => {
       const e = 1 - Math.pow(1 - k, 2.4);
       const r = r1 * (0.3 + e * 0.7);
       ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = Math.pow(1 - k, 1.3) * al;
+      if (big) ctx.imageSmoothingEnabled = false;
       ctx.drawImage(spr, x - r, y - r * sq, r * 2, r * 2 * sq);
       ctx.restore();
     }, o.layer || 'front');
@@ -394,6 +433,7 @@ export class FX {
   // reflet d'impact : étoile à 4 branches + trait anamorphique
   flare(x, y, o = {}) {
     const s = o.size ?? 30, color = o.color || '#ffffff', len = o.len ?? 2.2, rot = o.rot ?? 0;
+    if (s <= 26 && !rot) { this.emit(x, y, 0, 0, color, s * 0.95, (o.dur ?? 0.3) * 1.1, { shape: 'flare', drag: 0, rot: 0, spin: 0 }); return; }
     const spr = sprite(color, 'flare'), st = sprite(color, 'streak');
     this.add(o.dur ?? 0.3, (ctx, k) => {
       const a = k < 0.12 ? k / 0.12 : Math.pow(1 - (k - 0.12) / 0.88, 1.6);
@@ -401,7 +441,7 @@ export class FX {
       ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = a;
       ctx.translate(x, y); if (rot) ctx.rotate(rot);
       ctx.drawImage(spr, -sc, -sc, sc * 2, sc * 2);
-      if (len > 0) ctx.drawImage(st, -sc * len, -sc * 0.1, sc * len * 2, sc * 0.2);
+      if (len > 0 && !this.low) ctx.drawImage(st, -sc * len, -sc * 0.1, sc * len * 2, sc * 0.2);
       ctx.restore();
     }, o.layer || 'front');
   }
@@ -431,7 +471,7 @@ export class FX {
       const a = k < 0.12 ? k / 0.12 : 1 - (k - 0.12) / 0.88;
       const ww = w * (0.35 + a * 0.65);
       ctx.save(); ctx.globalAlpha = a * 0.5;
-      ctx.drawImage(barc, x - ww * 0.9, top, ww * 1.8, y1 - top);
+      if (!this.low) ctx.drawImage(barc, x - ww * 0.9, top, ww * 1.8, y1 - top);
       ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = a * (o.alpha ?? 1);
       ctx.drawImage(bar, x - ww, top, ww * 2, y1 - top);
       ctx.drawImage(gl, x - ww * 1.7, y1 - ww * 0.45, ww * 3.4, ww * 0.9);
@@ -499,20 +539,16 @@ export class FX {
       const p = vars[vi * 2], br = vars[vi * 2 + 1];
       const f = (Math.random() > 0.22 ? 1 : 0.3) * (1 - k * k);
       ctx.save(); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.beginPath(); polyPath(ctx, p, n);
+      ctx.lineWidth = 5 * W; ctx.strokeStyle = ca(deep, 0.6 * f); ctx.stroke();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.lineWidth = 8 * W; ctx.strokeStyle = ca(color, 0.28 * f); ctx.stroke();
+      ctx.lineWidth = 2 * W; ctx.strokeStyle = ca(WHITE, f); ctx.stroke();
       if (nb) {
         ctx.beginPath();
         for (let b = 0; b < nb; b++) { ctx.moveTo(br[b * 8], br[b * 8 + 1]); for (let s = 1; s < 4; s++) ctx.lineTo(br[b * 8 + s * 2], br[b * 8 + s * 2 + 1]); }
-        ctx.lineWidth = 2.4 * W; ctx.strokeStyle = ca(deep, 0.5 * f); ctx.stroke();
-        ctx.globalCompositeOperation = 'lighter';
-        ctx.lineWidth = 1.2 * W; ctx.strokeStyle = ca(color, 0.85 * f); ctx.stroke();
-        ctx.globalCompositeOperation = 'source-over';
+        ctx.lineWidth = 1.4 * W; ctx.strokeStyle = ca(color, 0.9 * f); ctx.stroke();
       }
-      ctx.beginPath(); polyPath(ctx, p, n);
-      ctx.lineWidth = 4.5 * W; ctx.strokeStyle = ca(deep, 0.55 * f); ctx.stroke();
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.lineWidth = 10 * W; ctx.strokeStyle = ca(color, 0.16 * f); ctx.stroke();
-      ctx.lineWidth = 4 * W; ctx.strokeStyle = ca(color, 0.8 * f); ctx.stroke();
-      ctx.lineWidth = 1.8 * W; ctx.strokeStyle = ca(WHITE, f); ctx.stroke();
       ctx.globalAlpha = f; const g = 20 * W; ctx.drawImage(gl, x2 - g, y2 - g, g * 2, g * 2);
       ctx.restore();
     }, o.layer || 'front');
@@ -529,7 +565,7 @@ export class FX {
     if (rib) { rp[0] = from[0]; rp[1] = from[1]; rc = 1; rh = 1 % RN; }
     const gspr = o.glow ? sprite(o.glow, 'glow') : null, gs = o.glowSize ?? 14;
     this.add(o.dur ?? 0.4, (ctx, k) => {
-      if (rib && rc > 1) drawRibbon(ctx, rp, rc, rh, RN, rib.width ?? 6, rib.color, 1);
+      if (rib && rc > 1) drawRibbon(ctx, rp, rc, rh, RN, rib.width ?? 6, rib.color, 1, this.low);
       if (gspr) { ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.9; ctx.drawImage(gspr, st.x - gs, st.y - gs, gs * 2, gs * 2); ctx.restore(); }
       if (o.draw) o.draw(ctx, st.x, st.y, st.a || 0, k);
     }, 'front', (k, done) => {
@@ -546,59 +582,38 @@ export class FX {
       if (trail && tick % (trail.every ?? 1) === 0 && (!this.low || tick % 2 === 0)) this.emit(nx, ny, (Math.random() - 0.5) * 30, (Math.random() - 0.5) * 30, Array.isArray(trail.color) ? trail.color[Math.floor(Math.random() * trail.color.length)] : trail.color, trail.size ?? 10, trail.life ?? 0.3, { shape: trail.shape, drag: 4 });
       if (done && !hit) {
         hit = true;
-        if (rib && rc > 1) { const w = rib.width ?? 6, c = rib.color; this.add(0.16, (ctx, q) => drawRibbon(ctx, rp, rc, rh, RN, w * (1 - q * 0.6), c, 1 - q)); }
+        if (rib && rc > 1 && !this.low) { const w = rib.width ?? 6, c = rib.color; this.add(0.16, (ctx, q) => drawRibbon(ctx, rp, rc, rh, RN, w * (1 - q * 0.6), c, 1 - q)); }
         o.onHit && o.onHit(st.x, st.y);
       }
     });
   }
   // décalque au sol qui s'estompe : 'scorch' (brûlure), 'crack' (fissures incandescentes), 'frost', 'splash', 'claw'
+  // les fissures sont des sprites pré-rendus (3 variantes par couleur) : 3 à 4 images par décalque et par image
   decal(x, y, o = {}) {
     const kind = o.kind || 'scorch', r = o.r ?? 40, color = o.color || '#ff7a1a', sq = o.squash ?? 0.3, dur = o.dur ?? 1.8, cool = o.cool ?? 2.5;
-    const dark = sprite(o.dark || '#1a0a14', 'smoke'), hot = sprite(color, 'soft');
-    let geo = null, nl = 0, seg = 4;
-    if (kind === 'crack' || kind === 'frost') {
-      nl = Math.max(3, Math.round((o.n ?? 7) * (this.low ? 0.6 : 1)));
-      geo = new Float32Array(nl * (seg + 1) * 2);
-      for (let l = 0; l < nl; l++) {
-        const a = (l / nl) * TAU + (Math.random() - 0.5) * 0.6, len = r * (0.55 + Math.random() * 0.5);
-        let cx = x + Math.cos(a) * r * 0.12, cy = y + Math.sin(a) * r * 0.12 * sq;
-        for (let s = 0; s <= seg; s++) {
-          const b = l * (seg + 1) * 2 + s * 2;
-          geo[b] = cx; geo[b + 1] = cy;
-          const aa = a + (Math.random() - 0.5) * (kind === 'frost' ? 0.2 : 0.9), d = len / seg;
-          cx += Math.cos(aa) * d; cy += Math.sin(aa) * d * sq;
-        }
-      }
-    } else if (kind === 'claw') {
-      nl = o.n ?? 3; seg = 1;
-      geo = new Float32Array(nl * 4);
-      const a = o.angle ?? 0.25, len = r * 1.6;
-      for (let l = 0; l < nl; l++) { const off = (l - (nl - 1) / 2) * (o.gap ?? 9); geo[l * 4] = x - Math.cos(a) * len / 2; geo[l * 4 + 1] = y + off * sq * 1.6 - Math.sin(a) * len / 2 * sq; geo[l * 4 + 2] = x + Math.cos(a) * len / 2; geo[l * 4 + 3] = y + off * sq * 1.6 + Math.sin(a) * len / 2 * sq; }
-    }
-    const lines = (ctx) => {
-      ctx.beginPath();
-      for (let l = 0; l < nl; l++) { const b = l * (seg + 1) * 2; ctx.moveTo(geo[b], geo[b + 1]); for (let s = 1; s <= seg; s++) ctx.lineTo(geo[b + s * 2], geo[b + s * 2 + 1]); }
-    };
+    const dark = sprite(o.dark || '#1a0a14', 'smoke'), hot = sprite(color, 'soft'), wet = kind === 'splash' ? sprite(color, 'smoke') : null;
+    const lined = kind === 'crack' || kind === 'frost' || kind === 'claw';
+    const v = Math.floor(Math.random() * 3), flip = Math.random() < 0.5 ? -1 : 1;
+    const lineD = lined && kind !== 'frost' ? crackSprite(kind, v, '#1c0a1e', true) : null;
+    const lineG = lined ? crackSprite(kind, v, color, false) : null;
+    const rb = r * 0.8;
     this.add(dur, (ctx, k) => {
       const a = k < 0.03 ? k / 0.03 : k > 0.45 ? 1 - (k - 0.45) / 0.55 : 1;
       const heat = Math.max(0, 1 - k * cool);
       ctx.save();
-      if (kind !== 'frost' && kind !== 'splash') { ctx.globalAlpha = a * (o.alpha ?? 0.75); ctx.drawImage(dark, x - r, y - r * sq, r * 2, r * 2 * sq); }
-      if (kind === 'splash') { ctx.globalAlpha = a * 0.5; ctx.drawImage(sprite(color, 'smoke'), x - r, y - r * sq, r * 2, r * 2 * sq); }
-      if (geo) {
-        ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.globalAlpha = a;
-        lines(ctx);
-        if (kind !== 'frost') { ctx.lineWidth = o.lw ?? 2.4; ctx.strokeStyle = 'rgba(28,10,30,0.6)'; ctx.stroke(); }
+      if (kind === 'splash') { ctx.globalAlpha = a * 0.5; ctx.drawImage(wet, x - r, y - r * sq, r * 2, r * 2 * sq); }
+      else if (kind === 'scorch' || (kind === 'crack' && r >= 50)) { ctx.globalAlpha = a * (o.alpha ?? 0.75) * (kind === 'crack' ? 0.6 : 1); ctx.drawImage(dark, x - rb * 0.7, y - rb * 0.7 * sq, rb * 1.4, rb * 1.4 * sq); }
+      if (lined) {
+        ctx.save(); ctx.translate(x, y); ctx.scale(flip, 1);
+        if (lineD) { ctx.globalAlpha = a * 0.85; ctx.drawImage(lineD, -r, -r * sq, r * 2, r * 2 * sq); }
+        const h = kind === 'frost' ? a * (0.6 + 0.4 * heat) : heat * a;
         ctx.globalCompositeOperation = 'lighter';
-        const h = kind === 'frost' ? 0.6 + 0.4 * heat : heat;
-        if (h > 0.01) {
-          ctx.lineWidth = (o.lw ?? 2.4) * 1.8; ctx.strokeStyle = ca(color, 0.5 * h); ctx.stroke();
-          ctx.lineWidth = (o.lw ?? 2.4) * 0.55; ctx.strokeStyle = ca(kind === 'frost' ? WHITE : shade(color, 0.6), 0.9 * h); ctx.stroke();
-        }
+        if (h > 0.04) { ctx.globalAlpha = h; ctx.drawImage(lineG, -r, -r * sq, r * 2, r * 2 * sq); }
+        ctx.restore();
       }
       ctx.globalCompositeOperation = 'lighter';
       const hh = kind === 'frost' ? a * 0.55 : heat * a * 0.8;
-      if (hh > 0.01) { ctx.globalAlpha = hh; ctx.drawImage(hot, x - r * 0.8, y - r * 0.8 * sq, r * 1.6, r * 1.6 * sq); }
+      if (hh > 0.04 && !this.low) { ctx.globalAlpha = hh; ctx.drawImage(hot, x - r * 0.7, y - r * 0.7 * sq, r * 1.4, r * 1.4 * sq); }
       ctx.restore();
     }, 'back');
   }
@@ -610,10 +625,9 @@ export class FX {
       const a = k < 0.15 ? k / 0.15 : k > 0.7 ? 1 - (k - 0.7) / 0.3 : 1;
       const r = r0 * (0.7 + 0.3 * Math.min(1, k * 5));
       const px = typeof x === 'function' ? x() : x;
-      ctx.save(); ctx.globalAlpha = a * (o.alpha ?? 0.9) * 0.7;
+      ctx.save(); ctx.globalAlpha = a * (o.alpha ?? 0.9);
+      if (o.add) ctx.globalCompositeOperation = 'lighter';
       ctx.translate(px, y); ctx.scale(1, sq); ctx.rotate(rot0 + k * dur * spin);
-      ctx.drawImage(spr, -r, -r, r * 2, r * 2);
-      ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = a * (o.alpha ?? 0.9) * 0.6;
       ctx.drawImage(spr, -r, -r, r * 2, r * 2);
       ctx.restore();
     }, o.layer || 'back');
@@ -660,8 +674,8 @@ export class FX {
 
   text(x, y, str, style = 'dmg') {
     const S = TEXT_STYLE[style] || TEXT_STYLE.dmg;
-    this.texts.push({ x: x + (Math.random() - 0.5) * 16, y, str, S, t: 0 });
-    if (this.texts.length > 42) this.texts.shift();
+    this.texts.push({ x: x + (Math.random() - 0.5) * 16, y, str, S, t: 0, bmp: null, bw: 0, bh: 0, res: 1 });
+    if (this.texts.length > 42) freeText(this.texts.shift());
   }
 
   update(dt) {
@@ -694,7 +708,7 @@ export class FX {
     for (let k = this.texts.length - 1; k >= 0; k--) {
       const x = this.texts[k];
       x.t += dt;
-      if (x.t > x.S.dur) this.texts.splice(k, 1);
+      if (x.t > x.S.dur) { freeText(x); this.texts.splice(k, 1); }
     }
   }
 
@@ -762,30 +776,48 @@ export class FX {
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
   }
+  // chiffres et étiquettes : chaque texte est rendu une seule fois dans une image (réserve recyclée)
   drawTexts(ctx) {
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.lineJoin = 'round';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round'; // état laissé au contexte, comme avant
+    if (!this.texts.length) return;
+    const m = ctx.getTransform();
+    const res = Math.min(4, Math.max(1, Math.hypot(m.a, m.b)));
     for (const x of this.texts) {
       const S = x.S, k = x.t / S.dur;
+      if (!x.bmp || x.res < res * 0.8) renderText(x, res);
       const pop = x.t < 0.12 ? 1.7 - (x.t / 0.12) * 0.7 : 1;
       const y = x.y - (x.t < 0.12 ? 0 : (x.t - 0.12) * 46);
-      const a = k > 0.7 ? 1 - (k - 0.7) / 0.3 : 1;
-      ctx.save();
-      ctx.globalAlpha = a;
-      ctx.translate(x.x, y);
-      ctx.scale(pop, pop);
-      ctx.font = `${S.size}px "Lilita One", "Baloo 2", system-ui, sans-serif`;
-      if (S.bg) {
-        const w = ctx.measureText(x.str).width + 12;
-        ctx.fillStyle = S.bg; ctx.beginPath(); ctx.roundRect ? ctx.roundRect(-w / 2, -S.size * 0.62, w, S.size * 1.24, 6) : ctx.rect(-w / 2, -S.size * 0.62, w, S.size * 1.24); ctx.fill();
-      }
-      ctx.lineWidth = S.size * 0.28; ctx.strokeStyle = S.stroke; ctx.strokeText(x.str, 0, 0);
-      if (S.grad) { const g = ctx.createLinearGradient(0, -S.size / 2, 0, S.size / 2); g.addColorStop(0, S.grad[0]); g.addColorStop(1, S.grad[1]); ctx.fillStyle = g; }
-      else ctx.fillStyle = S.fill;
-      ctx.fillText(x.str, 0, 0);
-      ctx.restore();
+      ctx.globalAlpha = k > 0.7 ? 1 - (k - 0.7) / 0.3 : 1;
+      const w = (x.bw / x.res) * pop, h = (x.bh / x.res) * pop;
+      ctx.drawImage(x.bmp, 0, 0, x.bw, x.bh, x.x - w / 2, y - h / 2, w, h);
     }
+    ctx.globalAlpha = 1;
   }
+}
+const TPOOL = [];
+function freeText(x) { if (x.bmp) { TPOOL.push(x.bmp); x.bmp = null; } }
+function renderText(x, res) {
+  freeText(x);
+  const S = x.S;
+  const c = TPOOL.pop() || document.createElement('canvas');
+  const g = c.getContext('2d');
+  const font = `${S.size}px "Lilita One", "Baloo 2", system-ui, sans-serif`;
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.font = font;
+  const tw = g.measureText(x.str).width;
+  const wu = tw + (S.bg ? 12 : 0) + S.size * 0.6, hu = S.size * 1.6;
+  const bw = Math.ceil(wu * res), bh = Math.ceil(hu * res);
+  if (c.width < bw || c.height < bh) { c.width = Math.max(c.width, bw); c.height = Math.max(c.height, bh); }
+  g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, bw + 2, bh + 2);
+  g.setTransform(res, 0, 0, res, (bw / 2), (bh / 2));
+  g.font = font; g.textAlign = 'center'; g.textBaseline = 'middle'; g.lineJoin = 'round';
+  if (S.bg) {
+    const w = tw + 12;
+    g.fillStyle = S.bg; g.beginPath(); if (g.roundRect) g.roundRect(-w / 2, -S.size * 0.62, w, S.size * 1.24, 6); else g.rect(-w / 2, -S.size * 0.62, w, S.size * 1.24); g.fill();
+  }
+  g.lineWidth = S.size * 0.28; g.strokeStyle = S.stroke; g.strokeText(x.str, 0, 0);
+  if (S.grad) { const gr = g.createLinearGradient(0, -S.size / 2, 0, S.size / 2); gr.addColorStop(0, S.grad[0]); gr.addColorStop(1, S.grad[1]); g.fillStyle = gr; } else g.fillStyle = S.fill;
+  g.fillText(x.str, 0, 0);
+  x.bmp = c; x.bw = bw; x.bh = bh; x.res = res;
 }
 export { shade };

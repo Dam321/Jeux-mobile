@@ -46,7 +46,7 @@ function elemHit(B, el, x, y, s = 1) {
       fx.burst(x, y, { count: 2, color: W, speed: 40, size: 6, life: 0.4, shape: 'flare' });
       break;
     case 'thunder':
-      for (let i = 0; i < Math.ceil(s); i++) { const a = Math.random() * TAU; fx.lightning(x, y, x + Math.cos(a) * 26 * s, y + Math.sin(a) * 18 * s, { color: P[0], dur: 0.14, width: 0.4, seg: 4, amp: 10, branches: 0 }); }
+      if (s >= 1) { const a = Math.random() * TAU; fx.lightning(x, y, x + Math.cos(a) * 26 * s, y + Math.sin(a) * 18 * s, { color: P[0], dur: 0.14, width: 0.4, seg: 4, amp: 10, branches: 0 }); }
       fx.burst(x, y, { count: n + 2, color: [P[0], W], speed: 240 * s, size: 4, life: 0.25, shape: 'spark' });
       break;
     case 'nature':
@@ -403,7 +403,7 @@ function staticArcs(B, e, C, dur) {
   const fx = B.fx;
   let tick = 0;
   fx.custom(dur, null, 'front', () => {
-    if (++tick % (fx.low ? 8 : 4) || e.dead) return;
+    if (++tick % (fx.low ? 12 : 6) || e.dead) return;
     const [x, y] = B.center(e); const h = e.height * 0.4;
     const a = Math.random() * TAU;
     fx.lightning(x + Math.cos(a) * h * 0.3, y + Math.sin(a) * h * 0.5, x + Math.cos(a + 1.2) * h * 0.7, y + Math.sin(a + 1.2) * h, { color: C, dur: 0.1, width: 0.35, seg: 4, amp: 8, branches: 0 });
@@ -453,7 +453,7 @@ export function castSkill(B, u, sk) {
         fx.shock(x, y, { r: 70, color: '#ffb52e', width: 7, dur: 0.35 });
         fx.ring(x, front.y, { r1: 80, color: '#ffb52e' });
         fx.burst(x, y, { count: 20, color: ['#ffcf8a', O, W], speed: 300, size: 5, life: 0.45, shape: 'spark' });
-        fx.burst(x, y, { count: 8, color: ['#f0d0a0', '#d9a066'], speed: 130, size: 10, endSize: 22, life: 0.7, shape: 'smoke', up: 30, alpha: 0.75 });
+        fx.burst(x, y, { count: 6, color: ['#f0d0a0', '#d9a066'], speed: 130, size: 8, endSize: 17, life: 0.65, shape: 'smoke', up: 30, alpha: 0.75 });
         fx.burst(x, y, { count: 8, color: ['#d9a066', '#b07040'], speed: 220, size: 4, life: 0.8, shape: 'debris', gravity: 500, up: 120 });
         yarnStrands(fx, x, y, '#e0a868');
         fx.decal(x, front.y, { kind: 'scorch', r: 34, color: O, dur: 1.4 });
@@ -558,6 +558,7 @@ export function castSkill(B, u, sk) {
       B.flash('#cfefff', 0.32);
       B.shake(0.9);
       fx.dim({ a: 0.45, dur: 0.85, color: '#05081a' });
+      { const [mx0] = mid(); fx.decal(mx0, gy, { kind: 'crack', r: 50, color: '#8fd9ff', dur: 1.6, n: 8, cool: 2 }); }
       B.foes(u).forEach((e, i) => B.later(i * 0.08, () => {
         if (e.dead) return;
         const [x, y] = B.center(e);
@@ -567,9 +568,8 @@ export function castSkill(B, u, sk) {
         fx.blast(x, y, { r: 46, color: '#8fd9ff', dur: 0.35 });
         fx.flare(x, e.y - 6, { size: 40, color: '#bfefff', dur: 0.3, len: 2.6 });
         fx.ring(x, e.y, { r1: 60, color: '#8fd9ff' });
-        fx.decal(x, e.y, { kind: 'crack', r: 28, color: '#8fd9ff', dur: 1.5, n: 6, cool: 2 });
         fx.burst(x, y, { count: 14, color: ['#8fd9ff', W], speed: 320, size: 5, life: 0.4, shape: 'spark' });
-        staticArcs(B, e, '#8fd9ff', 0.55);
+        if (i < 3) staticArcs(B, e, '#8fd9ff', 0.5);
         B.hit(u, e, mult, { skill: true }); B.stop(0.04);
         sfx('thunder');
       }));
@@ -583,18 +583,17 @@ export function castSkill(B, u, sk) {
       const from = [mx0 + 160 * f, -60];
       fx.projectile(from, [mx0, my0], { dur: 0.75, arc: 0, draw: drawMeteor('#ff5ca8', 24), glow: '#ff7a1a', glowSize: 46, ribbon: { color: '#ff7a1a', width: 40, len: 14 }, trail: { color: ['#ff7a1a', '#ffd23f', '#5a2a1a'], size: 9, life: 0.4 }, onHit: (x, y) => {
         B.flash('#ffb066', 0.45); B.shake(1.4); B.zoom(1.12, x, y); B.stop(0.09);
-        fx.blast(x, y, { r: 140, color: '#ff6a1a', dur: 0.7, soft: true });
+        fx.blast(x, y, { r: 110, color: '#ff6a1a', dur: 0.55, soft: true });
         fx.blast(x, y, { r: 48, color: '#ffd23f', dur: 0.22 });
-        fx.flare(x, y, { size: 64, color: '#ffd23f', dur: 0.45, len: 3 });
+        fx.flare(x, y, { size: 56, color: '#ffd23f', dur: 0.45, len: 3 });
         fx.shock(x, y, { r: 150, color: '#ffd23f', color2: '#ff5ca8', width: 12, dur: 0.55 });
         fx.ring(x, gy, { r1: 190, color: '#ffd23f', dur: 0.7, width: 10 });
-        fx.ring(x, gy, { r1: 110, color: '#ff5ca8', dur: 0.5, width: 7 });
-        fx.decal(x, gy, { kind: 'crack', r: 80, color: '#ff7a1a', dur: 2.4, n: 9, cool: 1.4 });
-        fx.rays(x, y, { n: 10, len: 150, width: 18, color: '#ffb066', dur: 0.6 });
-        fx.burst(x, y, { count: 36, color: ['#ff7a1a', '#ffd23f', '#ff5ca8', W], speed: 440, size: 5, life: 0.6, shape: 'spark' });
-        fx.burst(x, y, { count: 20, color: ['#ff7a1a', '#ffd23f'], speed: 260, size: 8, life: 0.7, gravity: 200, up: 80 });
+        fx.decal(x, gy, { kind: 'crack', r: 75, color: '#ff7a1a', dur: 1.8, cool: 1.4 });
+        fx.rays(x, y, { n: 7, len: 110, width: 13, color: '#ffb066', dur: 0.5 });
+        fx.burst(x, y, { count: 32, color: ['#ff7a1a', '#ffd23f', '#ff5ca8', W], speed: 440, size: 5, life: 0.6, shape: 'spark' });
+        fx.burst(x, y, { count: 16, color: ['#ff7a1a', '#ffd23f'], speed: 260, size: 6, life: 0.65, gravity: 200, up: 80 });
         fx.burst(x, gy - 6, { count: 22, color: ['#5a3a2a', '#8a5a3a'], speed: 300, size: 6, life: 0.9, gravity: 700, up: 220, shape: 'debris' });
-        fx.burst(x, gy - 12, { count: 10, color: ['#3a2420', '#5a3a30'], speed: 120, size: 16, endSize: 34, life: 1.4, shape: 'smoke', up: 50, alpha: 0.65, flatY: 0.5 });
+        fx.burst(x, gy - 12, { count: 6, color: ['#3a2420', '#5a3a30'], speed: 120, size: 12, endSize: 24, life: 1.2, shape: 'smoke', up: 50, alpha: 0.65, flatY: 0.5 });
         fx.burst(x, gy - 10, { count: 18, color: ['#ff7a1a', '#ffd23f'], speed: 90, size: 3, life: 1.6, shape: 'ember', up: 80, drag: 1.2, spread: 60 });
         for (const e of B.foes(u)) B.hit(u, e, mult, { skill: true });
         sfx('boom');
@@ -608,7 +607,7 @@ export function castSkill(B, u, sk) {
       const G = '#ffd23f';
       fx.dim({ a: 0.25, dur: 1.2 });
       fx.pillar(u.x, { color: G, width: 30, dur: 1.1, y: u.y });
-      fx.rays(cx, cy - 10, { n: 12, len: 130, width: 16, color: '#ffe680', dur: 1.1, spin: 0.5 });
+      fx.rays(cx, cy - 10, { n: 9, len: 110, width: 13, color: '#ffe680', dur: 1, spin: 0.5 });
       fx.glyph(u.x, u.y, { style: 'sun', color: G, color2: W, r: 62, dur: 1.4, spin: 0.8 });
       B.flash('#fff2b0', 0.3);
       fx.ring(u.x, u.y, { r1: 110, color: G, dur: 1 });
@@ -634,16 +633,14 @@ export function castSkill(B, u, sk) {
       sfx('laser');
       B.later(0.7, () => {
         sfx('boom'); B.flash('#d6a8ff', 0.5); B.shake(1.5); B.zoom(1.12, mx0, my0); B.stop(0.1);
-        fx.blast(mx0, my0, { r: 150, color: '#a050ff', dur: 0.8, soft: true });
-        fx.blast(mx0, my0, { r: 90, color: '#ff7ae0', dur: 0.5, soft: true });
+        fx.blast(mx0, my0, { r: 120, color: '#a050ff', dur: 0.6, soft: true });
         fx.blast(mx0, my0, { r: 44, color: '#ffd6ff', dur: 0.22 });
-        fx.flare(mx0, my0, { size: 66, color: '#ffd6ff', dur: 0.5, len: 3 });
+        fx.flare(mx0, my0, { size: 58, color: '#ffd6ff', dur: 0.5, len: 3 });
         fx.shock(mx0, my0, { r: 170, color: '#c77dff', color2: '#48f3ff', width: 12, dur: 0.6 });
-        fx.shock(mx0, my0, { r: 110, color: '#ff7ae0', width: 8, dur: 0.45 });
-        fx.ring(mx0, gy, { r1: 220, color: '#c77dff', dur: 0.8, width: 10 });
-        fx.rays(mx0, my0, { n: 14, len: 200, width: 20, color: '#e0b0ff', dur: 0.7, spin: 1 });
-        fx.decal(mx0, gy, { kind: 'crack', r: 90, color: '#c77dff', dur: 2.2, n: 9, cool: 1.5 });
-        fx.burst(mx0, my0, { count: 44, color: ['#c77dff', '#ff7ae0', '#7fd8ff', W], speed: 460, size: 6, life: 0.9, shape: 'star' });
+        fx.ring(mx0, gy, { r1: 200, color: '#c77dff', dur: 0.75, width: 9 });
+        fx.rays(mx0, my0, { n: 9, len: 140, width: 15, color: '#e0b0ff', dur: 0.55, spin: 1 });
+        fx.decal(mx0, gy, { kind: 'crack', r: 80, color: '#c77dff', dur: 1.8, cool: 1.5 });
+        fx.burst(mx0, my0, { count: 36, color: ['#c77dff', '#ff7ae0', '#7fd8ff', W], speed: 460, size: 5, life: 0.85, shape: 'star' });
         fx.burst(mx0, my0, { count: 28, color: [W, '#48f3ff', '#ff7ae0'], speed: 520, size: 5, life: 0.5, shape: 'spark' });
         fx.burst(mx0, my0, { count: 22, color: ['#c77dff', '#48f3ff', W], speed: 70, size: 3, life: 1.8, shape: 'ember', spread: 120, drag: 1 });
         for (const e of B.foes(u)) B.hit(u, e, mult, { skill: true });
@@ -695,7 +692,7 @@ export function kittenAttack(B, k, tg, mult, ult) {
     B.say(k, A.name + ' !', 'tag'); sfx('legendary'); B.shake(0.5);
     fx.glyph(k.x, k.y, { style: ULT_GLYPH[k.el] || 'rune', color: C, color2: H, r: 30, dur: 0.9, spin: 3 });
     fx.charge(() => B.head(k), { color: C, color2: H, dur: 0.22, size: 14, r: 24, rate: 2 });
-    fx.pillar(k.x, { color: C, width: 12, dur: 0.5, y: k.y, top: k.y - 90, motes: false });
+    if (!fx.low) fx.pillar(k.x, { color: C, width: 10, dur: 0.35, y: k.y, top: k.y - 80, motes: false });
   } else fx.flare(x0, y0, { size: 9, color: C, dur: 0.16, len: 1.4 });
   const draw = (ctx, x, y, a) => drawShape(ctx, A.shape, x, y, a, sz, col);
   const rib = { color: A.shape === 'rainbow' ? '#ff7ae0' : C, width: (A.shape === 'flame' || A.shape === 'darkflame' ? 6 : 4) * big, len: 8 };
@@ -727,7 +724,7 @@ export function kittenAttack(B, k, tg, mult, ult) {
         fx.lightning(px, py, x, y, { color: C, dur: 0.25, width: 0.7 * big, branches: 1, amp: 24 });
         px = x; py = y;
         if (!e.dead) B.hit(owner, e, dmg / Math.sqrt(foes.length), { pet: true });
-        fx.flare(x, y, { size: 14 * big, color: C, dur: 0.2 });
+        fx.flare(x, y, { size: 13 * big, color: C, dur: 0.2 });
         fx.burst(x, y, { count: 6, color: [C, W], speed: 180, size: 4, life: 0.3, shape: 'spark' });
       }));
       sfx('thunder');
@@ -737,7 +734,7 @@ export function kittenAttack(B, k, tg, mult, ult) {
       B.later(0.1, () => {
         const [x, y] = tc();
         fx.blast(x, y, { r: 40 * big, color: C, dur: 0.4 });
-        fx.flare(x, y, { size: 26 * big, color: H, dur: 0.35, len: 2 });
+        fx.flare(x, y, { size: ult ? 44 : 24, color: H, dur: 0.35, len: 2 });
         fx.shock(x, y, { r: 50 * big, color: C, width: 5, dur: 0.35 });
         fx.ring(x, tg.y, { r1: 60 * big, color: C });
         if (ult) { fx.rays(x, y, { n: 8, len: 90, width: 12, color: C, dur: 0.55 }); fx.glyph(x, tg.y, { style: ULT_GLYPH[k.el] || 'sun', color: C, color2: H, r: 60, dur: 0.9, spin: 2 }); }
@@ -772,9 +769,9 @@ export function kittenAttack(B, k, tg, mult, ult) {
         const [x, y] = tc();
         fx.projectile([x + 70, -30], [x + (i - 1) * 10, y], { dur: 0.42, arc: 0, draw: (ctx, px, py, a) => drawShape(ctx, A.shape, px, py, a, sz * 1.6, col), glow: C, glowSize: 14 * big, ribbon: { color: C, width: 12 * big, len: 12 }, trail: { color: [C, '#ffd23f', '#ffffff'], size: 4 * big, life: 0.35, every: 2 }, onHit: (px, py) => {
           fx.blast(px, py, { r: 34 * big, color: C });
-          fx.flare(px, py, { size: 24 * big, color: H, dur: 0.3 });
+          fx.flare(px, py, { size: ult ? 36 : 24, color: H, dur: 0.3 });
           fx.ring(px, tg.y, { r1: 40 * big, color: C, width: 5 });
-          fx.decal(px, tg.y, { kind: ult ? 'crack' : 'scorch', r: 18 * big, color: C, dur: 1.2, n: 5 });
+          if (ult) fx.decal(px, tg.y, { kind: 'crack', r: 36, color: C, dur: 1.2 });
           B.shake(0.3); hitOnce(px, py, 1 / n);
         } });
       });
@@ -784,8 +781,8 @@ export function kittenAttack(B, k, tg, mult, ult) {
         const foes = B.foes(owner); const e = foes[i % Math.max(1, foes.length)] || tg; const [x, y] = B.center(e);
         fx.pillar(x, { color: C, width: (ult ? 9 : 12) * big, dur: 0.45, y: e.y, alpha: ult ? 0.6 : 0.85 });
         if (A.shape === 'bolt') fx.lightning(x, -10, x, e.y - 4, { color: C, width: 0.9 * big });
-        else fx.glyph(x, e.y, { style: A.shape === 'star' ? 'sun' : 'rune', color: C, color2: H, r: 22 * big, dur: 0.6, spin: 3 });
-        fx.flare(x, e.y - 6, { size: 22 * big, color: H, dur: 0.3 });
+        else if (i === 0) fx.glyph(x, e.y, { style: A.shape === 'star' ? 'sun' : 'rune', color: C, color2: H, r: 26 * big, dur: 0.4 + n * 0.12, spin: 3 });
+        fx.flare(x, e.y - 6, { size: 22, color: H, dur: 0.3 });
         if (!e.dead) B.hit(owner, e, dmg / n, { pet: true });
         fx.burst(x, y, { count: 8, color: [C, W], speed: 120, up: 80, size: 5, life: 0.4, shape: 'star' });
       });
@@ -794,7 +791,7 @@ export function kittenAttack(B, k, tg, mult, ult) {
       B.later(0.05, () => {
         const [, y] = tc(); const sx = k.x, ex = Math.min(B.viewW, B.center(tg)[0] + 60);
         const gy = tg.y;
-        fx.decal((sx + ex) / 2 + 30, gy, { kind: 'splash', r: (ex - sx) / 2, color: C, dur: 1.2, squash: 0.18 });
+        fx.decal((sx + ex) / 2, gy, { kind: 'splash', r: Math.max(20, Math.abs(ex - sx) / 2), color: C, dur: 1.2, squash: 0.18 });
         fx.custom(0.55, (ctx, q) => {
           const x = sx + (ex - sx) * q, hgt = 34 * big * (1 - q * 0.4), a = 1 - q * 0.6;
           ctx.save();
@@ -821,12 +818,13 @@ export function kittenAttack(B, k, tg, mult, ult) {
     }
     case 'orbit': {
       const g = sprite(C, 'glow');
+      const halo = n <= 4, R0 = ult ? 30 : 18, ssz = ult ? sz * 0.55 : sz * 0.8;
       fx.custom(0.6, (ctx, q) => {
-        const rr = 18 * (0.6 + 0.4 * Math.min(1, q * 3));
+        const rr = R0 * (0.6 + 0.4 * Math.min(1, q * 3));
         for (let i = 0; i < n; i++) {
-          const a = (i / n) * TAU + q * 12, ox = k.x + Math.cos(a) * rr, oy = k.y - 24 + Math.sin(a) * 8;
-          ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.7; ctx.drawImage(g, ox - 8 * big, oy - 8 * big, 16 * big, 16 * big); ctx.restore();
-          drawShape(ctx, A.shape, ox, oy, a, sz * 0.8, col);
+          const a = (i / n) * TAU + q * 12, ox = k.x + Math.cos(a) * rr, oy = k.y - 26 + Math.sin(a) * rr * 0.4;
+          if (halo) { ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.7; ctx.drawImage(g, ox - 8 * big, oy - 8 * big, 16 * big, 16 * big); ctx.restore(); }
+          drawShape(ctx, A.shape, ox, oy, a, ssz, col);
         }
       });
       for (let i = 0; i < n; i++) B.later(0.6 + i * 0.05, () => fx.projectile([k.x + Math.cos(i) * 18, k.y - 24], tc, { dur: 0.3, arc: 12, draw, ribbon: rib, onHit: (x, y) => hitOnce(x, y, 1 / n) }));
@@ -866,7 +864,10 @@ export function kittenAttack(B, k, tg, mult, ult) {
       }, 'front', () => {
         const [x, y] = tc();
         const nn = fx.low ? 1 : 3;
-        for (let i = 0; i < nn; i++) fx.emit(x0, y0, (x - x0) * (1.6 + Math.random()), (y - y0) * 1.6 + (Math.random() - 0.5) * 80, i === 0 ? H : Math.random() < 0.5 ? C : P[3], (3 + Math.random() * 3) * big, 0.45, { drag: 1.5, endSize: 7 * big, shape: i === 0 ? 'glow' : 'soft' });
+        for (let i = 0; i < nn; i++) {
+          const hot = i === 0;
+          fx.emit(x0, y0, (x - x0) * (1.6 + Math.random()), (y - y0) * 1.6 + (Math.random() - 0.5) * 80, hot ? H : Math.random() < 0.5 ? C : P[3], (hot ? 3 : 4 + Math.random() * 3) * big, 0.45, { drag: 1.5, endSize: (hot ? 5 : 9) * big, shape: hot ? 'soft' : 'smoke', alpha: hot ? 1 : 0.9 });
+        }
         if (Math.random() < 0.4) fx.emit(x0, y0, (x - x0) * 1.4, (y - y0) * 1.4 - 20, smoke, 5 * big, 0.6, { shape: 'smoke', endSize: 14 * big, drag: 1.5, alpha: 0.5 });
       });
       for (let i = 0; i < 4; i++) B.later(0.15 + i * 0.12, () => { const [x, y] = tc(); hitOnce(x, y, 0.25); });
@@ -960,13 +961,18 @@ export function bossSkill(B, e, hero) {
     B.say(e, 'ATTENTION !', 'tag');
     const hx = hero.x;
     fx.custom(1.1, (ctx, q) => {
-      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      ctx.save();
       const R = 34 + q * 6, pulse = 0.7 + 0.3 * Math.sin(q * 30);
-      ell(ctx, hx, hero.y, R, R * 0.27); ctx.fillStyle = ca('#ff2a3d', 0.12 + q * 0.22); ctx.fill();
-      ctx.lineWidth = 2 + q * 1.5; ctx.strokeStyle = ca('#ff2a3d', 0.85 * pulse); ctx.stroke();
-      ell(ctx, hx, hero.y, R * q, R * 0.27 * q); ctx.fillStyle = ca('#ff5a3d', 0.35); ctx.fill();
-      ctx.lineWidth = 1.5; ctx.strokeStyle = ca('#ffd23f', 0.6 * q); ctx.stroke();
-      for (let i = 0; i < 8; i++) { const a = (i / 8) * TAU + q * 2; ctx.beginPath(); ctx.moveTo(hx + Math.cos(a) * (R + 3), hero.y + Math.sin(a) * (R + 3) * 0.27); ctx.lineTo(hx + Math.cos(a) * (R + 9), hero.y + Math.sin(a) * (R + 9) * 0.27); ctx.lineWidth = 2; ctx.strokeStyle = ca('#ff2a3d', 0.8 * pulse); ctx.stroke(); }
+      ell(ctx, hx, hero.y, R, R * 0.27); ctx.fillStyle = ca('#d0102a', 0.16 + q * 0.2); ctx.fill();
+      ctx.lineWidth = 2 + q * 1.5; ctx.strokeStyle = ca('#e01030', 0.85 * pulse); ctx.stroke();
+      ell(ctx, hx, hero.y, R * q, R * 0.27 * q); ctx.fillStyle = ca('#ff3a2a', 0.4); ctx.fill();
+      ctx.globalCompositeOperation = 'lighter';
+      ell(ctx, hx, hero.y, R, R * 0.27); ctx.lineWidth = 1.2; ctx.strokeStyle = ca('#ffb066', 0.7 * pulse); ctx.stroke();
+      ell(ctx, hx, hero.y, R * q, R * 0.27 * q); ctx.lineWidth = 1.5; ctx.strokeStyle = ca('#ffd23f', 0.7 * q); ctx.stroke();
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.beginPath();
+      for (let i = 0; i < 8; i++) { const a = (i / 8) * TAU + q * 2; ctx.moveTo(hx + Math.cos(a) * (R + 3), hero.y + Math.sin(a) * (R + 3) * 0.27); ctx.lineTo(hx + Math.cos(a) * (R + 10), hero.y + Math.sin(a) * (R + 10) * 0.27); }
+      ctx.lineWidth = 2.2; ctx.strokeStyle = ca('#e01030', 0.85 * pulse); ctx.stroke();
       ctx.restore();
     }, 'back');
     fx.charge(() => B.center(e), { color: '#ff5a3d', color2: '#ffd23f', dur: 1.05, size: 26, r: 40, rate: 1 });
