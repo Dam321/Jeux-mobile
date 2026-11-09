@@ -5,20 +5,25 @@ import {
   RARITIES, SUBSTATS, TRAININGS, trainingCost, SKILLS, SKILL_PASSIVE_ATK, SKILL_RARITY_ODDS, SKILL_PITY_LEG, SKILL_PITY_DIV,
   dupNeed, VIP_PERKS, VIP_THRESHOLDS, VIP_TEXT, PRODUCTS, FUND_TIERS, PASS_TIERS, PASS_XP_PER_TIER, DAILY_QUESTS, DAILY_CHESTS,
   LOGIN_CALENDAR, ACHIEVEMENTS, DUNGEONS, dungeonReward, towerReward, ARENA_SHOP, arenaDailyGems, AD_LIMIT, AD_REWARDS,
-  FIRST_RECHARGE, DUNGEON_FREE_KEYS, SLOTS, divisionOf, DIVISIONS,
+  FIRST_RECHARGE, DUNGEON_FREE_KEYS, SLOTS, divisionOf, DIVISIONS, LAIR_FREE, lairBuyCost,
 } from '../config.js';
 import {
-  KITTENS, KITTEN_ODDS, KITTEN_PITY_LEG, KITTEN_PITY_MYTH, ELEMENTS, KBONUS, LOOK_UNLOCK, PATTERN_COLORS, HETERO_COST, COSTUMES,
+  KITTENS, KITTEN_ODDS, KITTEN_PITY_LEG, KITTEN_PITY_MYTH, ELEMENTS, KBONUS, LOOK_UNLOCK, PATTERN_COLORS, HETERO_COST,
   SETS, artisanXpNext, craftGold, FORGE_MAX, forgeCost, RELICS, RELIC_CHEST, RELIC_CONSOLATION, RESOURCES, RES_BY_ID,
   MARKET_LOTS, MARKET_TAX, MARKET_QUICK_SELL, TERRITORIES, CLANS, WAR_SHOP, WAR_ENERGY,
 } from '../content.js';
-import { SKILL_BY_ID, KITTEN_BY_ID, skillLevelMult, kittenStats, itemPower, itemName, setCounts } from '../stats.js';
-import { passTier, craftCheck, forgeChance, milkNeeded, lookUnlocked, lookPrice } from '../economy.js';
+import { SKILL_BY_ID, KITTEN_BY_ID, skillLevelMult, kittenStats, itemPower, itemName, setCounts, COSTUMES } from '../stats.js';
+import { passTier, craftCheck, forgeChance, milkNeeded, lookUnlocked, lookPrice, bannerKitten } from '../economy.js';
+import {
+  ARTIFACTS, ARTIFACT_BY_ID, ARTIFACT_MAX_STARS, artifactFragsNeed, artifactLevelCost, artifactBonus, artifactSlots, ARTIFACT_CHEST,
+  AURAS, TITLES, FRAMES, STYLE_SHOP, POTIONS, TRANSMUTE_RATIO, TOWER_SHOP, TOWER_MILESTONES, towerFloorInfo, towerMilestone, towerFloorReward, LOYALTY, KITTEN_ATTACKS,
+} from '../content3.js';
+import { weekKey } from '../state.js';
 import { unitPrice, lotPrice, maxListings, gemSellRate, gemBuyRate, gemBuyLimit } from '../market.js';
 import { CLAN_BY_ID, defenderPower, defenderName, defenderLoadout, ownedTerritories, tributeAvailable, warBuyCost, myRank, botLoadout } from '../pvp.js';
 import { FURS, PATTERNS, EYES, EYE_STYLES, EARS, TAILS, catPortraitURL } from '../gfx/cat.js';
 import { itemIconURL } from '../gfx/gear.js';
-import { enemyPortrait } from '../gfx/enemies.js';
+import { monsterPortrait } from '../gfx/bestiary.js';
 import { resIcon, slotName } from './ui.js';
 
 const rr = (r) => ({ '--rc': RARITIES[r].color, '--rd': RARITIES[r].dark });
@@ -36,7 +41,7 @@ function spark(hist) {
 // ====================================================================== HÉROS
 const hero = {
   title: 'Héros',
-  tabs: [['gear', 'Équipement'], ['look', 'Apparence'], ['skills', 'Pouvoirs'], ['costumes', 'Costumes'], ['train', 'Entraînement'], ['stats', 'Stats']],
+  tabs: [['gear', 'Équipement'], ['look', 'Apparence'], ['style', 'Style'], ['artifacts', 'Artefacts'], ['skills', 'Pouvoirs'], ['train', 'Entraînement'], ['stats', 'Stats']],
   tabDot: (g, id) => (id === 'train' ? g.trainAffordable() : id === 'skills' ? g.st.res.feathers >= 1 || g.anyLevelUp('skills') : false),
   render(ui, g, tab) {
     const st = g.st, S = g.stats;
@@ -63,6 +68,32 @@ const hero = {
     }
     if (tab === 'look') return lookPanel(ui, g);
     if (tab === 'skills') return skillsPanel(ui, g);
+    if (tab === 'artifacts') return artifactsPanel(ui, g);
+    if (tab === 'style') {
+      const C = st.cos;
+      return h('div.col', null,
+        h('p.small.muted', null, 'Chaque élément de style possédé donne un bonus permanent : la collection compte !'),
+        h('h4', null, `Auras (${C.auras.length}/${AURAS.length}) · +ATQ`),
+        h('div.grid3', null, AURAS.map((a) => {
+          const own = C.auras.includes(a.id);
+          return h('button.style-card', { cls: 'r' + a.r + (own ? '' : ' locked') + (C.aura === a.id ? ' on' : ''), style: rr(a.r), onclick: () => (own ? g.setAura(a.id) : ui.open('shop', 'style')) },
+            h('span.aura-prev', { style: { '--a1': a.colors[0], '--a2': a.colors[1] || a.colors[0] } }), h('b', null, a.name), h('small', null, `+${a.atk}% ATQ`));
+        })),
+        h('h4', null, `Titres (${C.titles.length}/${TITLES.length}) · +PV`),
+        h('div.title-list', null, TITLES.map((t) => {
+          const own = C.titles.includes(t.id);
+          return h('button.title-row', { cls: (own ? '' : 'locked') + (C.title === t.id ? ' on' : ''), onclick: () => own && g.setTitle(t.id) }, h('b.title-tag', { cls: 'r' + t.r }, t.name), h('small.muted', null, own ? `+${t.hp}% PV` : t.src));
+        })),
+        h('h4', null, `Cadres (${C.frames.length}/${FRAMES.length}) · +butin`),
+        h('div.grid3', null, FRAMES.map((f) => {
+          const own = C.frames.includes(f.id);
+          return h('button.style-card', { cls: 'r' + f.r + (own ? '' : ' locked') + (C.frame === f.id ? ' on' : ''), style: rr(f.r), onclick: () => own && g.setFrame(f.id) },
+            h('span.frame-prev', { dataset: { frame: f.id } }, h('img', { src: g.portrait(), alt: '' })), h('b', null, f.name), h('small', null, own ? `+${f.luck}% butin` : f.src));
+        })),
+        h('h4', null, `Costumes (${st.costumes.owned.length}/${COSTUMES.length})`),
+        costumesBlock(ui, g),
+      );
+    }
     if (tab === 'costumes') {
       return h('div.col', null,
         h('button.toggle', { cls: st.costumes.show ? 'on' : '', onclick: () => g.toggleCostumeShow() }, h('span', null, 'Afficher le costume (sinon : votre apparence + équipement)'), h('i')),
@@ -189,6 +220,61 @@ function skillsPanel(ui, g) {
   );
 }
 
+function costumesBlock(ui, g) {
+  const st = g.st;
+  return h('div.col', null,
+    h('button.toggle', { cls: st.costumes.show ? 'on' : '', onclick: () => g.toggleCostumeShow() }, h('span', null, 'Afficher le costume porté'), h('i')),
+    h('div.grid2', null, COSTUMES.map((c) => {
+      const owned = st.costumes.owned.includes(c.id);
+      const cur = st.costumes.current === c.id;
+      const bon = [c.atk ? `+${c.atk}% ATQ` : '', c.hp ? `+${c.hp}% PV` : '', c.crit ? `+${c.crit}% Crit.` : '', c.critDmg ? `+${c.critDmg}% Dég. crit.` : '', c.dodge ? `+${c.dodge}% Esquive` : ''].filter(Boolean).join(' · ') || 'Classique';
+      const btn = cur ? h('button.btn.sm.gray', { disabled: true }, 'Porté') : owned ? h('button.btn.sm.green', { onclick: () => g.setCostume(c.id) }, 'Porter') : h('button.btn.sm.purple', { onclick: () => g.costumeSource(c.id) }, 'Obtenir');
+      return h('div.skin-card', { cls: 'r' + c.r + (owned ? '' : ' locked'), style: rr(c.r) }, h('img', { src: g.costumeURL(c.id), alt: '' }), h('b', null, c.name), h('small.bonus', null, bon), h('small.muted', null, owned ? 'Bonus actif' : c.src), btn);
+    })),
+  );
+}
+
+function artifactsPanel(ui, g) {
+  const st = g.st, A = st.artifacts;
+  const slots = artifactSlots(g.stats.vip);
+  const detail = (a) => {
+    const o = A.owned[a.id] || { lvl: 1, stars: -1, frags: 0 };
+    const unlocked = o.stars >= 0;
+    const cost = artifactLevelCost(a, o.lvl);
+    const statName = a.stat === 'atk' ? 'ATQ' : a.stat === 'hp' ? 'PV' : a.stat === 'gold' ? 'Or gagné' : a.stat === 'kitDmg' ? 'Dégâts des chatons' : (SUBSTATS[a.stat] || {}).name || a.stat;
+    const body = h('div.detail', { style: rr(a.r) },
+      h('div.detail-top', { cls: 'r' + a.r }, h('span.sk-ic', { html: ui.artIcon(a) }), h('div', null, h('b', null, a.name), h('span.irar', null, RARITIES[a.r].name), h('div.muted', null, unlocked ? `Niveau ${o.lvl} · ${'★'.repeat(o.stars)}${'☆'.repeat(ARTIFACT_MAX_STARS - o.stars)}` : 'Pas encore débloqué'))),
+      h('ul.lines', null, h('li', null, `${statName} +${fmt(artifactBonus(a, Math.max(1, o.lvl), Math.max(0, o.stars)))}%`), h('li', null, `+${a.per}% par niveau, +25 % par étoile — niveaux illimités`)),
+      h('div.copies', null, h('span', null, `Fragments ${o.frags}/${artifactFragsNeed(o.stars)}`), h('div.bar', null, h('i', { style: { transform: `scaleX(${Math.min(1, o.frags / artifactFragsNeed(o.stars))})` } }))));
+    const btns = [];
+    if (unlocked) {
+      btns.push({ label: 'Niveau +1', sub: `${resIcon('artDust')}${fmt(cost.dust)} · ${icon('gold')}${fmt(cost.gold)}`, cls: 'gold', fn: () => { g.artifactLevel(a.id, 1); } });
+      btns.push({ label: 'x10', cls: 'blue', fn: () => { g.artifactLevel(a.id, 10); } });
+      if (o.stars < ARTIFACT_MAX_STARS) btns.push({ label: 'Étoile', cls: o.frags >= artifactFragsNeed(o.stars) ? 'purple' : 'gray', disabled: o.frags < artifactFragsNeed(o.stars), fn: () => { g.artifactStar(a.id); } });
+      const idx = A.equipped.indexOf(a.id);
+      btns.push(idx >= 0 && idx < slots ? { label: 'Retirer', cls: 'red', fn: () => g.unequipArtifact(idx) } : { label: 'Équiper', cls: 'green', fn: () => g.equipArtifact(a.id) });
+    }
+    ui.modal({ title: 'Artefact', body, buttons: btns, cls: 'r' + a.r });
+  };
+  return h('div.col', null,
+    h('div.eq-row', null, Array.from({ length: 6 }, (_, i) => {
+      if (i >= slots) return h('div.eq-slot.locked', { html: icon('lock') + `<small>VIP ${i === 4 ? 6 : 11}</small>`, onclick: () => ui.open('shop', 'vip') });
+      const id = A.equipped[i];
+      if (!id) return h('div.eq-slot.empty', null, '+');
+      const a = ARTIFACT_BY_ID[id];
+      return h('button.eq-slot', { cls: 'r' + a.r, style: rr(a.r), onclick: () => detail(a) }, h('span.sk-ic', { html: ui.artIcon(a) }), h('b', null, 'Nv ' + A.owned[id].lvl));
+    })),
+    h('div.res-banner', { html: `${resIcon('artDust')} ${fmt(st.mats.artDust || 0)} poussière · ${icon('gold')} ${fmt(st.res.gold)}` }),
+    h('button.btn.purple.wide', { onclick: () => ui.open('shop', 'artifacts') }, h('span', null, 'Coffre d\'artefacts'), h('small', null, 'Fragments : boss, Tour des Défis, coffres, boutiques')),
+    h('div.coll-grid', null, ARTIFACTS.map((a) => {
+      const o = A.owned[a.id];
+      const un = o && o.stars >= 0;
+      return h('button.coll', { cls: 'r' + a.r + (un ? '' : ' locked'), style: rr(a.r), onclick: () => detail(a) }, h('span.sk-ic', { html: ui.artIcon(a) }), h('b', null, a.name),
+        un ? h('small', null, `Nv ${o.lvl} · ★${o.stars}`) : h('div.bar', null, h('i', { style: { transform: `scaleX(${Math.min(1, (o ? o.frags : 0) / 10)})` } }), h('small', null, `${o ? o.frags : 0}/10`)));
+    })),
+  );
+}
+
 // ====================================================================== CHATONS
 const kittens = {
   title: 'Chatons',
@@ -202,7 +288,7 @@ const kittens = {
       const body = h('div.detail', { style: rr(k.r) },
         h('div.detail-top', { cls: 'r' + k.r }, h('img', { src: g.kittenURL(k.id), alt: '' }), h('div', null, h('b', null, k.name), h('span.irar', null, RARITIES[k.r].name), h('div', { style: { color: E.color } }, 'Élément ' + E.name), h('div.muted', null, o ? `Niveau ${o.lvl}` : 'Pas encore trouvé'))),
         h('ul.lines', null,
-          h('li', null, `Attaque : ${fmt(ks.atkMult * 100)}% ATQ toutes les 2,2 s${k.r >= 5 ? ' + attaque ULTIME' : ''}`),
+          h('li', null, `Attaque « ${(KITTEN_ATTACKS[k.id] || {}).name} » : ${fmt(ks.atkMult * 100)}% ATQ toutes les 2,2 s${k.r >= 5 ? ' + version ULTIME' : ''}`),
           h('li', null, `Si équipé : +${fmt(ks.equipAtk)}% ATQ et ${KBONUS[k.bonus].name} +${fmt(ks.bonus * (['gold', 'luck', 'critDmg', 'skillDmg', 'bossDmg'].includes(k.bonus) ? 2 : k.bonus === 'hp' ? 1.5 : 0.5))}%`),
           h('li', null, `Possédé : +${fmt(ks.ownHp)}% PV`)),
         o ? h('div.copies', null, h('span', null, `Copies ${o.copies}/${dupNeed(o.lvl)}`), h('div.bar', null, h('i', { style: { transform: `scaleX(${Math.min(1, o.copies / dupNeed(o.lvl))})` } }))) : null);
@@ -228,6 +314,7 @@ const kittens = {
         const k = KITTEN_BY_ID[id];
         return h('button.eq-slot', { cls: 'r' + k.r, style: rr(k.r), onclick: () => detail(k) }, h('img', { src: g.kittenURL(id), alt: '' }), h('b', null, 'Nv ' + data.owned[id].lvl));
       })),
+      (() => { const fid = bannerKitten(weekKey()); const fk = KITTEN_BY_ID[fid]; return h('div.banner-card', { style: rr(fk.r) }, h('img', { src: g.kittenURL(fid), alt: '' }), h('div.grow', null, h('small', null, 'CHATON VEDETTE DE LA SEMAINE'), h('b', null, fk.name), h('span', null, `${RARITIES[fk.r].name} · « ${KITTEN_ATTACKS[fid].name} » · 50 % des tirages ${RARITIES[fk.r].name}`))); })(),
       h('div.summon-card.pets', null,
         h('div.summon-top', null, h('b', null, 'Panier des Chatons'), h('span.have', { html: icon('eggs') + ' ' + fmt(have) + ' · ' + icon('milk') + ' ' + st.res.milk })),
         h('div.summon-btns', null, sumBtn(1, 80), sumBtn(10, 700), sumBtn(35, 2400)),
@@ -253,7 +340,7 @@ const kittens = {
 // ====================================================================== ATELIER (craft, forgemagie, ressources)
 const atelier = {
   title: 'Atelier',
-  tabs: [['sets', 'Panoplies'], ['forge', 'Forgemagie'], ['res', 'Ressources']],
+  tabs: [['sets', 'Panoplies'], ['forge', 'Forgemagie'], ['alchemy', 'Alchimie'], ['res', 'Ressources']],
   render(ui, g, tab) {
     const st = g.st;
     if (tab === 'sets') {
@@ -297,6 +384,21 @@ const atelier = {
         h('p.small.muted.center', null, `Chances : ${[1, 4, 7, 10, 13, 15].map((k) => `+${k} ${[95, 90, 82, 74, 66, 58, 50, 42, 34, 27, 20, 14, 9, 6, 4][k - 1]}%`).join(' · ')}. Brisez les objets du sac pour obtenir des runes.`),
       );
     }
+    if (tab === 'alchemy') {
+      const now = Date.now();
+      const active = [['atkUntil', 'Force'], ['hpUntil', 'Vitalité'], ['goldUntil', 'Fortune'], ['luckUntil', 'Chance'], ['royalUntil', 'Élixir Royal']].filter(([k]) => st.boost[k] > now);
+      const trans = RESOURCES.filter((r) => r.r < 6 && (st.mats[r.id] || 0) >= TRANSMUTE_RATIO[r.r] && !['rune', 'gutterBadge', 'artDust'].includes(r.id));
+      return h('div.col', null,
+        active.length ? h('div.boosts', null, active.map(([k, n]) => h('span.boost-tag', null, n + ' · ', h('b', { dataset: { until: st.boost[k] } })))) : null,
+        h('h4', null, 'Potions'),
+        POTIONS.map((p) => h('div.potion', { style: { '--pc': p.color } },
+          h('i.flask'), h('div.grow', null, h('b', null, `${p.name} (x${st.potions[p.id] || 0})`), h('small.muted', null, p.desc), h('div.set-cost', null, p.cost.map(([id, n]) => h('span.cost-it', { cls: (st.mats[id] || 0) >= n ? 'ok' : 'ko' }, h('span', { html: resIcon(id) }), `${fmt(st.mats[id] || 0)}/${n}`)))),
+          h('div.btn-col', null, h('button.btn.sm.purple', { onclick: () => g.brew(p.id, 1) }, 'Préparer'), h('button.btn.sm.green', { disabled: !st.potions[p.id], onclick: () => g.drinkPotion(p.id) }, 'Boire')))),
+        h('h4', null, 'Transmutation'),
+        h('p.small.muted', null, `Transformez ${TRANSMUTE_RATIO[0]} ressources d'une rareté en 1 ressource aléatoire de la rareté supérieure.`),
+        trans.length ? h('div.res-list', null, trans.map((r) => h('div.res-row', { cls: 'r' + r.r }, h('span', { html: resIcon(r.id) }), h('div.grow', null, h('b', null, r.name), h('small.muted', null, `x${fmt(st.mats[r.id])} · ${TRANSMUTE_RATIO[r.r]} → 1 ${RARITIES[r.r + 1].name}`)), h('button.btn.xs.purple', { onclick: () => g.transmuteRes(r.id) }, 'Transmuter')))) : h('p.muted.small', null, 'Pas assez de ressources identiques pour l\'instant.'),
+      );
+    }
     // ressources
     const owned = RESOURCES.filter((r) => (st.mats[r.id] || 0) > 0);
     return h('div.col', null,
@@ -314,8 +416,8 @@ const atelier = {
 // ====================================================================== COMBAT (PvP + PvE)
 const combat = {
   title: 'Combat',
-  tabs: [['arena', 'Arène'], ['war', 'Gouttières'], ['tower', 'Arbre à Chat'], ['dungeons', 'Donjons']],
-  tabDot: (g, id) => (id === 'dungeons' ? DUNGEONS.some((d) => g.st.dungeons[d.id].keys > 0) : id === 'arena' ? g.st.arena.tickets > 0 || g.arenaDailyClaimable() : id === 'war' ? g.st.war.energy > 0 || tributeAvailable(g.st) : false),
+  tabs: [['tower', 'Tour des Défis'], ['lairs', 'Repaires'], ['arena', 'Arène'], ['war', 'Gouttières'], ['dungeons', 'Donjons']],
+  tabDot: (g, id) => (id === 'lairs' ? g.st.lairs.tickets > 0 && g.st.camp.best >= 10 : id === 'dungeons' ? DUNGEONS.some((d) => g.st.dungeons[d.id].keys > 0) : id === 'arena' ? g.st.arena.tickets > 0 || g.arenaDailyClaimable() : id === 'war' ? g.st.war.energy > 0 || tributeAvailable(g.st) : id === 'tower' ? (g.st.daily.q.tower || 0) < 2 : false),
   render(ui, g, tab) {
     const st = g.st;
     if (tab === 'arena') {
@@ -381,13 +483,45 @@ const combat = {
         })),
       );
     }
+    if (tab === 'lairs') {
+      const L = st.lairs, vipMax = VIP_PERKS[g.stats.vip].dungeonBuys;
+      return h('div.col', null,
+        h('div.tower-head.lair-head', null, h('div.grow', null, h('b', null, `Tickets : ${L.tickets}`), h('div.small', null, `${LAIR_FREE} gratuits par jour · achats ${L.buys}/${vipMax}`)),
+          h('button.btn.sm', { cls: L.buys < vipMax ? 'purple' : 'gray', onclick: () => g.buyLairTicket() }, h('span', null, '+1 ticket'), h('small', { html: icon('gems') + ' ' + lairBuyCost(L.buys) }))),
+        h('p.small.muted', null, 'Affrontez à nouveau les boss de map déjà vaincus. Chaque victoire donne à coup sûr leur matériau de boss, indispensable aux panoplies de l\'Atelier. Le boss s\'adapte à votre progression.'),
+        h('div.lairs', null, g.lairList().map((x) => h('div.lair', { cls: x.open ? '' : 'locked' },
+          h('img.lair-img', { src: monsterPortrait(x.B.boss, g.era().variant), alt: '' }),
+          h('div.grow', null, h('b', null, x.B.name), h('small.muted', null, `Map ${x.ch} · ${x.name}`), h('div.lair-drop', { html: resIcon(x.B.drop) + ' ' + RES_BY_ID[x.B.drop].name })),
+          x.open ? h('button.btn.sm', { cls: L.tickets > 0 ? 'red' : 'gray', onclick: () => g.startLair(x.biome) }, 'Combattre') : h('span.small.muted', null, `Boss ${x.ch}-10`)))),
+      );
+    }
     if (tab === 'tower') {
       const f = st.tower.floor;
-      const floors = [f + 2, f + 1, f, Math.max(1, f - 1)].filter((x, i, a) => a.indexOf(x) === i);
+      const floors = [f + 3, f + 2, f + 1, f];
+      const nextM = TOWER_MILESTONES.find((m) => m >= f) || (Math.ceil(f / 100) * 100);
       return h('div.col', null,
-        h('div.tower', null, floors.map((x) => h('div.floor', { cls: x === f ? 'cur' : x < f ? 'done' : '' }, h('b', null, 'Étage ' + x), chipsOf(ui, g, towerReward(x)),
-          x === f ? h('button.btn.green', { onclick: () => g.startTower() }, 'Grimper') : x < f ? h('span.check', null, '✓') : h('span.muted', null, 'Verrouillé')))),
-        h('p.muted.small.center', null, 'Étages infinis. Étage 30 : costume Flocon des Neiges. Tous les 25 étages : Éclat de lune.'),
+        h('div.tower-head', null, h('div.grow', null, h('b', null, `Étage ${f}`), h('div.small', null, `Record : ${st.tower.best} · étages infinis`)), h('span.have', null, fmt(st.res.towerTokens) + ' jetons')),
+        h('div.tower3', null, floors.map((x) => {
+          const info = towerFloorInfo(x);
+          const ms = towerMilestone(x);
+          return h('div.tfloor', { cls: (x === f ? 'cur ' : '') + (info.boss ? 'boss' : '') },
+            h('div.tf-num', null, x),
+            h('div.grow', null,
+              h('b', null, info.boss ? 'Gardien' : 'Défi'),
+              info.mods.length ? h('div.mods', null, info.mods.map((m) => h('span.mod', null, m.name + ' : ' + m.desc))) : h('small.muted', null, 'Sans modificateur'),
+              chipsOf(ui, g, ms ? { ...towerFloorReward(x), ...ms } : towerFloorReward(x))),
+            x === f ? h('button.btn.green', { onclick: () => g.startTower() }, 'Combattre') : h('span.muted.small', null, 'À venir'));
+        })),
+        h('div.milestone', null, h('b', null, `Prochain palier : étage ${nextM}`), chipsOf(ui, g, towerMilestone(nextM) || {})),
+        h('div.milestone.daily', null, h('b', null, 'Récompense du jour (selon votre record)'), chipsOf(ui, g, g.towerDailyInfo()),
+          h('button.btn', { cls: st.daily.towerDaily || st.tower.best < 1 ? 'gray' : 'gold', disabled: st.daily.towerDaily || st.tower.best < 1, onclick: () => g.towerSweep() }, st.daily.towerDaily ? 'Récupérée — revenez demain' : 'Récupérer')),
+        h('p.small.muted.center', null, 'Un modificateur par étage, un gardien tous les 10 étages, des cosmétiques exclusifs aux paliers 10, 25, 30, 50, 75, 100, 150, 200, 250, 300, 400, 500…'),
+        h('h4', null, 'Boutique de la Tour'),
+        h('div.grid2', null, TOWER_SHOP.map((a) => {
+          const n = st.tower.shop[a.id] || 0;
+          const out = n >= a.limit;
+          return h('div.shop-mini', null, chipsOf(ui, g, a.rewards), h('small.muted', null, `${n}/${a.limit}`), h('button.btn.sm', { cls: out ? 'gray' : st.res.towerTokens >= a.cost ? 'gold' : 'gray', disabled: out, onclick: () => g.towerShopBuy(a.id) }, h('span', null, fmt(a.cost) + ' jetons')));
+        })),
       );
     }
     const maxBuys = VIP_PERKS[g.stats.vip].dungeonBuys;
@@ -395,7 +529,7 @@ const combat = {
       const ds = st.dungeons[d.id];
       const rew = dungeonReward(d.id, ds.lvl, st.camp.best);
       return h('div.dungeon', { style: { '--dc': d.color } },
-        h('img.dg-img', { src: enemyPortrait(d.enemy), alt: '' }),
+        h('img.dg-img', { src: monsterPortrait(d.enemy), alt: '' }),
         h('div.grow', null, h('b', null, d.name), h('div.muted.small', null, `Niveau ${ds.lvl} · ${d.desc}`), chipsOf(ui, g, rew), h('div.keys', { html: icon('key') + ` ${ds.keys}/${DUNGEON_FREE_KEYS}` })),
         h('div.dg-btns', null,
           h('button.btn.sm.green', { disabled: ds.keys <= 0, onclick: () => g.startDungeon(d.id) }, 'Combattre'),
@@ -507,8 +641,8 @@ function productCard(ui, g, id, opts = {}) {
 }
 const shop = {
   title: 'Boutique',
-  tabs: [['offers', 'Offres'], ['relics', 'Reliques'], ['gems', 'Gemmes'], ['cards', 'Cartes'], ['pass', 'Passe'], ['vip', 'VIP']],
-  tabDot: (g, id) => (id === 'offers' ? !g.st.daily.freeGift : id === 'vip' ? g.vipGiftClaimable() : id === 'cards' ? g.fundClaimable() : id === 'pass' ? g.passClaimable() : false),
+  tabs: [['offers', 'Offres'], ['relics', 'Reliques'], ['artifacts', 'Artefacts'], ['style', 'Style'], ['gems', 'Gemmes'], ['cards', 'Cartes'], ['loyalty', 'Fidélité'], ['pass', 'Passe'], ['vip', 'VIP']],
+  tabDot: (g, id) => (id === 'offers' ? !g.st.daily.freeGift : id === 'vip' ? g.vipGiftClaimable() : id === 'cards' ? g.fundClaimable() : id === 'pass' ? g.passClaimable() : id === 'loyalty' ? g.loyaltyClaimable() : id === 'artifacts' ? !g.st.daily.artFree : false),
   render(ui, g, tab) {
     const st = g.st;
     if (tab === 'offers') {
@@ -550,6 +684,42 @@ const shop = {
         RELICS.map((R) => h('div.relic-row', null, h('img', { src: itemIconURL(R.slot, R.base, 8), alt: '' }), h('div.grow', null, h('b', null, R.name), h('small', null, `${slotName(R.slot)} · ${R.desc}`)), [...Object.values(st.gear), ...st.bag].some((x) => x && x.relic === R.id) ? h('span.check', null, '✓') : null)),
       );
     }
+    if (tab === 'artifacts') {
+      const tot = ARTIFACT_CHEST.odds.reduce((a, b) => a + b, 0);
+      return h('div.col', null,
+        h('div.relic-card.art', null, h('b', null, 'Coffre d\'artefacts'), h('p.small', null, 'Chaque coffre donne 2 à 4 fragments d\'un artefact et de la poussière. 10 fragments débloquent un artefact, les suivants ajoutent des étoiles.'),
+          h('div.summon-btns', null,
+            !st.daily.artFree ? h('button.btn.summon.gold', { onclick: () => g.artifactPull(1) }, h('span', null, 'Gratuit'), h('small', null, '1 / jour')) : h('button.btn.summon.purple', { onclick: () => g.artifactPull(1) }, h('span', null, 'x1'), h('small', { html: icon('gems') + ' ' + ARTIFACT_CHEST.cost1 })),
+            h('button.btn.summon.purple', { onclick: () => g.artifactPull(10) }, h('span', null, 'x10'), h('small', { html: icon('gems') + ' ' + fmt(ARTIFACT_CHEST.cost10) })))),
+        h('h4', null, 'Probabilités par coffre'),
+        h('div.odds', null, ARTIFACT_CHEST.odds.map((p, r) => (p ? h('div.orow', { style: { '--rc': RARITIES[r].color } }, h('i'), h('span', null, `Artefact ${RARITIES[r].name}`), h('b', null, pct((p / tot) * 100)), h('em', null, `${ARTIFACTS.filter((a) => a.r === r).length} artefacts`)) : null))),
+      );
+    }
+    if (tab === 'style') {
+      const C = st.cos;
+      return h('div.col', null,
+        h('p.small.muted', null, 'Auras, cadres et costumes exclusifs. Tout ce que vous possédez renforce votre chat pour toujours.'),
+        h('div.grid3', null, STYLE_SHOP.map((it, i) => {
+          const owned = it.kind === 'aura' ? C.auras.includes(it.id) : it.kind === 'frame' ? C.frames.includes(it.id) : st.costumes.owned.includes(it.id);
+          const R = it.kind === 'aura' ? AURAS.find((a) => a.id === it.id) : it.kind === 'frame' ? FRAMES.find((f) => f.id === it.id) : COSTUMES.find((c) => c.id === it.id);
+          return h('div.style-card', { cls: 'r' + R.r, style: rr(R.r) },
+            it.kind === 'aura' ? h('span.aura-prev', { style: { '--a1': R.colors[0], '--a2': R.colors[1] || R.colors[0] } }) : it.kind === 'frame' ? h('span.frame-prev', { dataset: { frame: R.id } }, h('img', { src: g.portrait(), alt: '' })) : h('img.cos-img', { src: g.costumeURL(R.id), alt: '' }),
+            h('b', null, R.name), h('small', null, it.kind === 'aura' ? 'Aura' : it.kind === 'frame' ? 'Cadre' : 'Costume'),
+            h('button.btn.xs', { cls: owned ? 'gray' : 'purple', disabled: owned, onclick: () => g.buyStyle(i) }, owned ? 'Possédé' : h('span', { html: icon('gems') + fmt(it.gems) })));
+        })),
+      );
+    }
+    if (tab === 'loyalty') {
+      const spent = st.iap.spent;
+      return h('div.col', null,
+        h('div.relic-card', null, h('b', null, 'Récompenses de fidélité'), h('p.small', null, `Chaque achat compte, pour toujours. Total : ${fmtEuro(spent)}.`)),
+        LOYALTY.map((L, i) => {
+          const ok = spent >= L.cents, got = st.loyalty.includes(i);
+          return h('div.loyal-row', { cls: got ? 'done' : ok ? 'ready' : '' }, h('b.lv', null, fmtEuro(L.cents)), chipsOf(ui, g, L.rewards),
+            got ? h('span.check', null, '✓') : h('button.btn.sm', { cls: ok ? 'gold' : 'gray', disabled: !ok, onclick: () => g.claimLoyalty(i) }, ok ? 'Prendre' : h('span', { html: icon('lock') })));
+        }),
+      );
+    }
     if (tab === 'gems') {
       return h('div.col', null,
         h('div.grid3', null, ['gems_1', 'gems_2', 'gems_3', 'gems_4', 'gems_5', 'gems_6'].map((id, i) => {
@@ -567,7 +737,7 @@ const shop = {
       return h('div.col', null,
         h('div.card-offer.monthly', null, h('b', null, 'Carte Mensuelle'), h('p.small', null, PRODUCTS.monthly.desc), monthlyLeft ? h('div.active', null, `Active — ${monthlyLeft} jours restants`) : null,
           h('button.btn.green.price', { onclick: () => g.showProduct('monthly') }, (monthlyLeft ? 'Prolonger ' : '') + fmtEuro(PRODUCTS.monthly.price))),
-        h('div.card-offer.lifetime', null, h('b', null, 'Carte Royale à vie'), h('p.small', null, PRODUCTS.lifetime.desc), st.iap.lifetime ? h('div.active', null, 'Active pour toujours') : h('button.btn.gold.price', { onclick: () => g.showProduct('lifetime') }, fmtEuro(PRODUCTS.lifetime.price))),
+        h('div.card-offer.lifetime', null, h('b', null, 'Sans Pub à vie'), h('p.small', null, PRODUCTS.noads.desc), st.iap.noads ? h('div.active', null, 'Actif pour toujours') : h('button.btn.gold.price', { onclick: () => g.showProduct('noads') }, fmtEuro(PRODUCTS.noads.price))),
         h('div.card-offer.fund', null, h('b', null, 'Fonds de croissance'), h('p.small', null, PRODUCTS.fund.desc), st.iap.fund ? h('div.active', null, 'Acheté') : h('button.btn.purple.price', { onclick: () => g.showProduct('fund') }, fmtEuro(PRODUCTS.fund.price)),
           h('div.fund-list', null, FUND_TIERS.map((f, i) => {
             const claimed = st.iap.fundClaimed.includes(i);
@@ -649,10 +819,11 @@ const ads = {
   title: 'Vidéos bonus',
   render(ui, g) {
     const st = g.st;
-    const left = AD_LIMIT - st.daily.ads;
+    const lim = g.adLimit();
+    const left = lim - st.daily.ads;
     return h('div.col', null,
-      h('p.center', null, `Regardez une courte vidéo pour un bonus gratuit. Restantes aujourd'hui : ${left}/${AD_LIMIT}`),
-      st.iap.lifetime ? h('p.center.good', null, 'Carte Royale : bonus instantanés, sans vidéo !') : null,
+      h('p.center', null, `Regardez une courte vidéo pour un bonus gratuit. Restantes aujourd'hui : ${left}/${lim}`),
+      st.iap.noads ? h('p.center.good', null, 'Sans Pub à vie : bonus instantanés !') : h('button.btn.gold.wide', { onclick: () => g.showProduct('noads') }, h('span', null, 'Sans Pub à vie'), h('small', null, `${fmtEuro(PRODUCTS.noads.price)} · bonus instantanés pour toujours`)),
       h('div.grid2', null, AD_REWARDS.map((r, i) => h('div.shop-mini', null, chipsOf(ui, g, r), h('button.btn.sm', { cls: left > 0 ? 'green' : 'gray', disabled: left <= 0, onclick: () => g.watchAd(() => g.grantAd(i)) }, h('span', { html: icon('tv') + ' Regarder' }))))),
       h('p.legal', null, 'Vidéos simulées : brancher une régie publicitaire (ex. AdMob) pour la version publiée.'),
     );

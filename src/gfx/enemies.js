@@ -1,19 +1,21 @@
 // =====================================================================
-//  Ennemis — dessin vectoriel Canvas 2D, vue de côté (style « Legend of
-//  Mushroom »). Repère local : pieds en y = 0, y vers le bas (le corps est
-//  donc en y négatif), centré en x = 0. LES ENNEMIS REGARDENT VERS LA GAUCHE
-//  (x négatif) : ils marchent vers le héros.
-//  Chaque ennemi a 2 poses (frame 0/1) pour une animation de marche simple.
+//  « Les Nuisibles » — le gang de tout ce que les chats détestent.
+//  Dessin vectoriel Canvas 2D, vue de côté, cel shading (cel() de draw.js),
+//  contour OUT épais et liseré coloré (rim light) propre à chaque personnage.
+//
+//  Repère local : pieds en y = 0, y vers le bas, centré en x = 0.
+//  LES ENNEMIS REGARDENT VERS LA GAUCHE (x négatif).
+//  frame : entier quelconque (4 poses : frame % 4).
+//  variant : 0 normal · 1 Élite (or) · 2 Corrompu (toxique) · 3 Infernal (braise).
 // =====================================================================
 import {
-  OUT, shade, mix, rgba, seeded, ell, rr, smooth, poly, paint, vgrad, ball, gloss, glow,
-  makeSprite, spriteURL,
+  OUT, shade, mix, rgba, seeded, ell, rr, smooth, poly, paint, glow, cel,
+  makeSprite, spriteURL, opaqueBounds,
 } from './draw.js';
 
 export const ENEMY_KINDS = ['rat', 'dog', 'vacuum', 'cucumber', 'pigeon', 'crab', 'wasp', 'mole', 'yeti', 'robodog', 'slime', 'ufo', 'ghost', 'knightrat'];
 
-// h : hauteur approximative de la silhouette au-dessus de la ligne des pieds (unités)
-// fly : ennemi volant (flotte au-dessus du sol, pas de pieds)
+// h : hauteur de la silhouette au-dessus de la ligne des pieds (unités) · fly : flotte au-dessus du sol
 export const ENEMY_INFO = {
   rat: { name: 'Souris voyou', h: 72 },
   dog: { name: 'Bouledogue', h: 85 },
@@ -31,11 +33,113 @@ export const ENEMY_INFO = {
   knightrat: { name: 'Rat chevalier', h: 100 },
 };
 
-const LW = 3;
+export const BOSS_KINDS = ['ratKing', 'cerberus', 'crabTitan', 'yetiLord', 'vacuumPrime', 'magmaKing', 'martianEmperor'];
+export const BOSS_INFO = {
+  ratKing: { name: 'Roi des Rats', h: 170 },
+  cerberus: { name: 'Cerbère le Bouledogue', h: 175 },
+  crabTitan: { name: 'Crabe Titan', h: 190 },
+  yetiLord: { name: 'Yéti Suprême', h: 210 },
+  vacuumPrime: { name: 'Aspirateur Suprême', h: 185 },
+  magmaKing: { name: 'Roi Magma', h: 190 },
+  martianEmperor: { name: 'Empereur Martien', h: 205 },
+};
 
-// ------------------------------------------------------------ outils
+const TAU = Math.PI * 2;
+const WHITE = '#fffaf0';
+
+// =====================================================================
+//  Palettes & variantes
+//  Une palette de base associe chaque couleur à un rôle :
+//   b corps · d peau/détails roses · c tissu · m métal · a accent (cheveux, bandeau…)
+//   e iris / LED · g lumière (lampe, réacteur) · k inchangé
+//  Chaque variante remappe les rôles par luminance sur des rampes de couleurs :
+//  la structure clair/foncé du personnage est conservée, la teinte change.
+// =====================================================================
+function rgb(hex) {
+  let h = hex.replace('#', '');
+  if (h.length === 3) h = h.split('').map((c) => c + c).join('');
+  const n = parseInt(h, 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function lum(hex) { const [r, g, b] = rgb(hex); return (0.3 * r + 0.55 * g + 0.15 * b) / 255; }
+function ramp(stops, L) {
+  const n = stops.length - 1;
+  const x = Math.max(0, Math.min(1, L)) * n;
+  const i = Math.min(n - 1, Math.floor(x));
+  return mix(stops[i], stops[i + 1], x - i);
+}
+const GOLD_R = ['#3a1f04', '#8a560c', '#dc9c1c', '#ffd23f', '#fff3b0'];
+const RAMPS = {
+  1: { m: GOLD_R, a: GOLD_R },
+  2: {
+    b: ['#170b26', '#3d1f66', '#7348b4', '#a984e8', '#e9ddff'],
+    d: ['#13200b', '#3d6a18', '#79b52e', '#bdf064', '#efffc6'],
+    c: ['#0b120c', '#17281a', '#264028', '#3f6236', '#7c9c5a'],
+    m: ['#100a18', '#2a2040', '#4f4470', '#857aa8', '#d0caea'],
+    a: ['#183808', '#3c8a10', '#74d81a', '#b0ff44', '#ebffc0'],
+  },
+  3: {
+    b: ['#0e0507', '#2c0c10', '#5a1716', '#952a1c', '#d85a30'],
+    d: ['#260704', '#6e1a08', '#c8401a', '#ff8428', '#ffd27a'],
+    c: ['#090607', '#181012', '#2a1e22', '#43343a', '#6e5c64'],
+    m: ['#100909', '#2a1818', '#4e2e2c', '#84523e', '#d09a70'],
+    a: ['#4a0c04', '#a8260a', '#ff5410', '#ffa02a', '#ffe27a'],
+  },
+};
+const EYE_GLOW = { 2: '#9dff3a', 3: '#ffae2a' };
+const RIM_V = { 1: '#ffd23f', 2: '#9dff3a', 3: '#ff7a1a' };
+function pal(base, v) {
+  const out = {};
+  for (const k in base) {
+    const val = base[k];
+    if (!Array.isArray(val)) { out[k] = val; continue; }
+    const [c, role] = val;
+    let r = c;
+    if (v === 1) {
+      if (RAMPS[1][role]) r = ramp(RAMPS[1][role], lum(c) * 0.85 + 0.12);
+    } else if (v >= 2) {
+      if (role === 'e' || role === 'g') r = EYE_GLOW[v];
+      else if (RAMPS[v][role]) r = ramp(RAMPS[v][role], lum(c));
+    }
+    out[k] = r;
+  }
+  out.rim = v ? RIM_V[v] : base.rim;
+  out.gold = ramp(GOLD_R, 0.78);
+  out.goo = v === 3 ? '#ff7a1a' : '#9dff3a';
+  return out;
+}
+
+// ------------------------------------------------------------ état courant
+let V = 0;        // variante en cours de dessin
+let RIM = '#ffffff';
+let EYEG = null;  // couleur d'yeux luisants (variantes 2 et 3)
+
+// =====================================================================
+//  Formes géométriques « porteuses » (centre et taille pour cel())
+// =====================================================================
+function geo(f, pts, pad = 0) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const [x, y] of pts) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  f.cx = (x0 + x1) / 2; f.cy = (y0 + y1) / 2;
+  f.size = Math.max(3, ((x1 - x0) + (y1 - y0)) / 4 + pad);
+  return f;
+}
+const B = (pts, t = 0.5) => geo((ctx) => smooth(ctx, pts, true, t), pts);
+const PL = (pts) => geo((ctx) => poly(ctx, pts), pts);
+function E(x, y, rx, ry = rx, rot = 0) {
+  const f = (ctx) => ell(ctx, x, y, rx, ry, rot);
+  f.cx = x; f.cy = y; f.size = (Math.abs(rx) + Math.abs(ry)) / 2;
+  return f;
+}
+function RR(x, y, w, h, r) {
+  const f = (ctx) => rr(ctx, x, y, w, h, r);
+  f.cx = x + w / 2; f.cy = y + h / 2; f.size = (Math.abs(w) + Math.abs(h)) / 4;
+  return f;
+}
+const TP = (pts, w0, w1 = w0) => geo((ctx) => taper(ctx, pts, w0, w1), pts, (w0 + w1) / 4);
+
 // Échantillonne une courbe Catmull-Rom passant par pts.
-function spline(pts, n = 10) {
+function spline(pts, n = 8) {
   const out = [];
   const N = pts.length;
   if (N < 2) return pts.map((p) => p.slice());
@@ -51,8 +155,8 @@ function spline(pts, n = 10) {
   return out;
 }
 // Chemin d'un trait effilé (queue, bras, antenne…) de largeur w0 → w1, bouts arrondis.
-function taper(ctx, pts, w0, w1 = w0, n = 10) {
-  const s = spline(pts, n);
+function taper(ctx, pts, w0, w1 = w0) {
+  const s = spline(pts, 8);
   const L = [], R = [], T = [];
   for (let i = 0; i < s.length; i++) {
     const a = s[Math.max(i - 1, 0)], b = s[Math.min(i + 1, s.length - 1)];
@@ -74,104 +178,183 @@ function taper(ctx, pts, w0, w1 = w0, n = 10) {
   ctx.arc(s[0][0], s[0][1], Math.max(w0 / 2, 0.01), aR, aR - Math.PI, true);
   ctx.closePath();
 }
-function limb(ctx, pts, w0, w1, fill, lw = LW) { taper(ctx, pts, w0, w1); paint(ctx, fill, lw); }
-// Point et normale le long d'une courbe (pour placer des pics, des rivets…)
+// Point (et tangente) le long d'une courbe
 function along(pts, t) {
-  const s = spline(pts, 12);
+  const s = spline(pts, 10);
   const i = Math.min(s.length - 2, Math.max(0, Math.round(t * (s.length - 1))));
   const a = s[i], b = s[i + 1];
   const d = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
   return { x: a[0], y: a[1], tx: (b[0] - a[0]) / d, ty: (b[1] - a[1]) / d };
 }
-function clipTo(ctx, path, fn) { ctx.save(); path(); ctx.clip(); fn(); ctx.restore(); }
-// Forme « toon » : dégradé boule + ombre propre en bas à droite + contour.
-function form(ctx, path, base, x, y, r, o = {}) {
-  const { lw = LW, sh = 0.2, k = 0.14, light = 0.32, dark = 0.16, fill = null } = o;
-  path();
-  ctx.fillStyle = shade(base, -sh);
-  ctx.fill();
-  ctx.save();
-  path(); ctx.clip();
-  ctx.translate(-r * k * 0.8, -r * k);
-  path();
-  ctx.fillStyle = fill || ball(ctx, x, y, r, base, light, dark);
-  ctx.fill();
-  ctx.restore();
-  path();
-  paint(ctx, null, lw);
+function stroke(ctx, w = 3, col = OUT) {
+  ctx.lineWidth = w; ctx.strokeStyle = col; ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.stroke();
 }
 function fillA(ctx, color, a) { ctx.save(); ctx.globalAlpha *= a; ctx.fillStyle = color; ctx.fill(); ctx.restore(); }
-function blush(ctx, x, y, rx = 5, ry = 3, color = '#ff5d8f', a = 0.38) { ell(ctx, x, y, rx, ry); fillA(ctx, color, a); }
-// Gros œil expressif (fâché mais mignon). inner = +1 si le coin intérieur est à droite.
-function eye(ctx, x, y, rx, ry, o = {}) {
-  const {
-    lid = null, inner = 1, anger = 0.55, look = [-0.45, 0.1], iris = '#3b2a5c',
-    pupil = OUT, lw = 2.5, sclera = '#ffffff', pr = 0.74,
-  } = o;
-  const path = () => ell(ctx, x, y, rx, ry);
-  path();
-  const g = ctx.createLinearGradient(0, y - ry, 0, y + ry);
-  g.addColorStop(0, mix(sclera, '#a9b0d6', 0.45));
-  g.addColorStop(0.45, sclera);
-  g.addColorStop(1, mix(sclera, '#dfe2f4', 0.4));
-  ctx.fillStyle = g;
-  ctx.fill();
+function clip(ctx, s, fn) { ctx.save(); s(ctx); ctx.clip(); fn(); ctx.restore(); }
+
+// =====================================================================
+//  Remplissage « Nuisible » : cel shading + détails internes + liseré + fissures + contour
+// =====================================================================
+function rimLight(ctx, s, color, w, lw) {
+  const d = w + lw / 2;
   ctx.save();
-  path(); ctx.clip();
-  const px = x + look[0] * rx * 0.42, py = y + look[1] * ry * 0.5 + ry * 0.12;
-  ell(ctx, px, py, rx * pr, ry * pr * 1.04);
-  ctx.fillStyle = ball(ctx, px, py, ry * pr, iris, 0.45, 0.35);
-  ctx.fill();
-  ell(ctx, px - rx * 0.02, py + ry * 0.05, rx * pr * 0.56, ry * pr * 0.6);
-  ctx.fillStyle = pupil; ctx.fill();
-  ell(ctx, px - rx * 0.24, py - ry * 0.26, rx * 0.24, ry * 0.2, -0.4); ctx.fillStyle = '#ffffff'; ctx.fill();
-  ell(ctx, px + rx * 0.24, py + ry * 0.3, rx * 0.11, ry * 0.09); ctx.fill();
-  if (lid) {
-    const xo = x - inner * rx * 1.25, xi = x + inner * rx * 1.25;
-    const yo = y - ry * 1.05, yi = y - ry * (1.05 - anger * 1.7);
-    poly(ctx, [[xo, yo], [xi, yi], [xi, y - ry * 3], [xo, y - ry * 3]]);
-    ctx.fillStyle = lid; ctx.fill();
-    ctx.beginPath(); ctx.moveTo(xo, yo); ctx.lineTo(xi, yi);
-    ctx.lineWidth = lw * 1.25; ctx.strokeStyle = OUT; ctx.lineCap = 'round'; ctx.stroke();
+  s(ctx); ctx.clip();
+  ctx.save(); ctx.translate(-0.5 * d, -0.86 * d); s(ctx); ctx.restore();
+  ctx.rect(-1e4, -1e4, 2e4, 2e4);
+  ctx.clip('evenodd');
+  ctx.fillStyle = color;
+  ctx.fillRect(-1e4, -1e4, 2e4, 2e4);
+  ctx.restore();
+}
+function cracks(ctx, s, seed, n = 3) {
+  const col = V === 2 ? '#a6ff3a' : '#ffb02e';
+  const r = seeded(seed * 7919 + 101);
+  const k = s.size;
+  ctx.save(); s(ctx); ctx.clip();
+  ctx.lineCap = 'round'; ctx.lineJoin = 'miter';
+  const draw = (pts) => {
+    poly(ctx, pts, false);
+    ctx.strokeStyle = rgba(col, 0.3); ctx.lineWidth = 6.5; ctx.stroke();
+    ctx.strokeStyle = OUT; ctx.lineWidth = 3.2; ctx.stroke();
+    ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.stroke();
+  };
+  for (let i = 0; i < n; i++) {
+    const th = (i / n) * TAU + r() * 1.4 - 0.4;
+    let x = s.cx + Math.cos(th) * k * 1.05, y = s.cy + Math.sin(th) * k * 0.95;
+    const pts = [[x, y]];
+    let a = th + Math.PI + (r() - 0.5) * 0.5;
+    for (let j = 0; j < 4; j++) {
+      const L = k * 0.17 + 2 + r() * 2;
+      const z = a + (j % 2 ? 0.55 : -0.55);
+      x += Math.cos(z) * L; y += Math.sin(z) * L; pts.push([x, y]);
+    }
+    draw(pts);
+    const p = pts[2], b = a + (r() > 0.5 ? 1.1 : -1.1);
+    draw([p, [p[0] + Math.cos(b) * (3 + k * 0.12), p[1] + Math.sin(b) * (3 + k * 0.12)]]);
   }
   ctx.restore();
-  path();
-  paint(ctx, null, lw);
 }
-// Sourcil épais (taper du bout extérieur vers l'intérieur).
-function brow(ctx, x0, y0, x1, y1, w = 4, color = OUT) {
-  taper(ctx, [[x0, y0], [(x0 + x1) / 2, (y0 + y1) / 2 - 1.2], [x1, y1]], w * 0.55, w);
-  ctx.fillStyle = color; ctx.fill();
+// o : size/cx/cy (cel), shadow, depth, hi, glint, inside(), rim (couleur ou false), rw, crack (graine), lw
+function fig(ctx, s, base, o = {}) {
+  const k = o.size ?? s.size;
+  const lw = o.lw ?? 3;
+  cel(ctx, s, base, {
+    cx: o.cx ?? s.cx, cy: o.cy ?? s.cy, size: k,
+    shadow: o.shadow ?? 0.3, depth: o.depth ?? 0.24, hi: o.hi ?? 0.18,
+    glint: o.glint ?? (k > 10), lw: 0,
+  });
+  if (o.inside) clip(ctx, s, o.inside);
+  const rc = o.rim === undefined ? RIM : o.rim;
+  if (rc) rimLight(ctx, s, rc, o.rw ?? Math.min(2.2, 0.9 + k * 0.06), lw);
+  if (o.crack != null && V >= 2) cracks(ctx, s, o.crack, o.cn ?? 3);
+  if (lw > 0) { s(ctx); stroke(ctx, lw); }
 }
-function ear(ctx, x, y, r, fur, inner, rot = 0) {
-  ell(ctx, x, y, r, r * 0.95, rot);
-  paint(ctx, ball(ctx, x, y, r, fur), LW);
-  ell(ctx, x + r * 0.06, y + r * 0.1, r * 0.66, r * 0.6, rot);
-  ctx.fillStyle = ball(ctx, x, y + r * 0.1, r * 0.7, inner, 0.3, 0.25);
-  ctx.fill();
-}
-function whiskers(ctx, x, y, dir = -1, len = 12, a = 0.6) {
-  ctx.save();
-  ctx.globalAlpha *= a;
-  ctx.strokeStyle = OUT; ctx.lineWidth = 1.2; ctx.lineCap = 'round';
-  for (const k of [-1, 0, 1]) {
+// Trait effilé rempli en cel (bras, queue, tentacule…)
+function limb(ctx, pts, w0, w1, col, o = {}) { fig(ctx, TP(pts, w0, w1), col, { glint: false, ...o }); }
+function blob(ctx, x, y, r, col, o = {}) { fig(ctx, E(x, y, r, o.ry ?? r, o.rot ?? 0), col, { glint: r > 5, ...o }); }
+
+// =====================================================================
+//  Visage
+// =====================================================================
+// Œil expressif. inner : côté du coin intérieur (+1 = vers +x). anger : inclinaison de la paupière,
+// lid : fermeture (0 ouvert … 1 fermé). look : direction du regard (-1..1). Variantes 2/3 : yeux luisants.
+function eye(ctx, x, y, r, o = {}) {
+  const ry = o.ry ?? r * 1.18;
+  const skin = o.skin ?? '#888888';
+  const inner = o.inner ?? 1;
+  const ang = o.anger ?? 0.45;
+  const lid = o.lid ?? 0.12;
+  const look = o.look ?? [-0.5, 0.15];
+  const sh = () => ell(ctx, x, y, r, ry);
+  if (o.blink) {
+    sh(); ctx.fillStyle = shade(skin, -0.12); ctx.fill(); stroke(ctx, 2.2);
     ctx.beginPath();
-    ctx.moveTo(x, y + k * 2);
-    ctx.quadraticCurveTo(x + dir * len * 0.6, y + k * 3.5 - 1, x + dir * len, y + k * 5.5);
-    ctx.stroke();
+    ctx.moveTo(x - r * 0.95, y - ry * 0.05 + inner * ang * ry * 0.3);
+    ctx.quadraticCurveTo(x, y + ry * 0.45, x + r * 0.95, y - ry * 0.05 - inner * ang * ry * 0.3);
+    stroke(ctx, 2.6);
+    return;
+  }
+  const lit = o.lit === false ? null : EYEG;
+  const px = x + look[0] * r * 0.42, py = y + look[1] * ry * 0.4 + ry * 0.06;
+  sh(); ctx.fillStyle = lit ? '#1a0b1c' : '#ffffff'; ctx.fill();
+  ctx.save(); sh(); ctx.clip();
+  if (lit) {
+    glow(ctx, px, py, r * 1.5, lit, 0.95);
+    ell(ctx, px, py, r * 0.66, ry * 0.68); ctx.fillStyle = lit; ctx.fill();
+    ell(ctx, px - r * 0.1, py - ry * 0.1, r * 0.34, ry * 0.36); ctx.fillStyle = mix(lit, '#ffffff', 0.75); ctx.fill();
+    ell(ctx, px, py, r * 0.13, ry * 0.5); ctx.fillStyle = OUT; ctx.fill();
+  } else {
+    ell(ctx, x + r * 0.15, y - ry * 1.02, r * 1.35, ry * 0.62); ctx.fillStyle = 'rgba(86,64,150,0.2)'; ctx.fill();
+    ell(ctx, px, py, r * 0.66, ry * 0.7); ctx.fillStyle = o.iris ?? '#3d2a66'; ctx.fill();
+    ell(ctx, px, py + ry * 0.05, r * 0.38, ry * 0.42); ctx.fillStyle = '#130a1d'; ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ell(ctx, px - r * 0.27, py - ry * 0.28, r * 0.27, r * 0.25); ctx.fill();
+    ell(ctx, px + r * 0.24, py + ry * 0.26, r * 0.12, r * 0.12); ctx.fill();
+  }
+  if (lid > 0 || ang !== 0) {
+    const xo = x - inner * r * 1.4, xi = x + inner * r * 1.4;
+    const yb = y - ry + lid * 2 * ry;
+    const yo = yb - ang * ry * 0.75, yi = yb + ang * ry * 0.75;
+    poly(ctx, [[xo, yo], [xi, yi], [xi, y - ry * 3], [xo, y - ry * 3]]);
+    ctx.fillStyle = skin; ctx.fill();
+    ctx.beginPath(); ctx.moveTo(xo, yo); ctx.lineTo(xi, yi); stroke(ctx, 2.8);
   }
   ctx.restore();
+  sh(); stroke(ctx, o.lw ?? 2.4);
+  if (lit) { ctx.save(); ctx.globalCompositeOperation = 'lighter'; glow(ctx, px, py, r * 2.3, lit, 0.55); ctx.restore(); }
 }
-// Patte de quadrupède : rectangle arrondi jusqu'au sol + pied.
-function leg(ctx, x, top, w, color, paw = color, lean = 0) {
-  rr(ctx, x - w / 2 + lean * 0.5, top, w, -top - 3, w / 2);
-  paint(ctx, vgrad(ctx, top, 0, color, 0.15, 0.25), LW);
-  ell(ctx, x - 2 + lean, -3.6, w * 0.62, 4.2);
-  paint(ctx, ball(ctx, x - 2 + lean, -4, w * 0.6, paw, 0.3, 0.2), LW);
+// Sourcil épais (du bout extérieur x0 vers l'intérieur x1)
+function brow(ctx, x0, y0, x1, y1, w = 4.5, col = OUT) {
+  taper(ctx, [[x0, y0], [(x0 + x1) / 2, (y0 + y1) / 2 - w * 0.35], [x1, y1]], w * 0.55, w);
+  ctx.fillStyle = col; ctx.fill();
 }
-function sparkle(ctx, x, y, r, color = '#ffffff', a = 1) {
-  ctx.save();
-  ctx.globalAlpha *= a;
+function fang(ctx, x, y, h = 4.5, w = 3.4, up = false, col = WHITE) {
+  const d = up ? -1 : 1;
+  poly(ctx, [[x - w / 2, y], [x + w / 2, y], [x + w * 0.12, y + d * h]]);
+  paint(ctx, col, 1.7);
+}
+function blush(ctx, x, y, rx = 4.5, ry = 2.6, a = 0.42) { ell(ctx, x, y, rx, ry); fillA(ctx, '#ff5d8f', a); }
+
+// =====================================================================
+//  Accessoires et décors de variantes
+// =====================================================================
+function spike(ctx, x, y, ang, len = 8, w = 5, col = '#ffd23f', lw = 2) {
+  const dx = Math.cos(ang), dy = Math.sin(ang), nx = -dy, ny = dx;
+  const a = [x + nx * w / 2, y + ny * w / 2], b = [x + dx * len, y + dy * len], c = [x - nx * w / 2, y - ny * w / 2];
+  poly(ctx, [a, b, c]); ctx.fillStyle = shade(col, -0.22); ctx.fill();
+  const lit = (nx * -0.55 + ny * -0.83) > 0 ? a : c;
+  poly(ctx, [lit, b, [x, y]]); ctx.fillStyle = shade(col, 0.2); ctx.fill();
+  poly(ctx, [a, b, c]); stroke(ctx, lw);
+}
+// Épaulière dorée à pointes (Élite)
+function pauldron(ctx, x, y, r, rot = 0, col) {
+  const g = col || PAL.gold;
+  ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+  spike(ctx, -r * 0.45, -r * 0.5, -Math.PI / 2 - 0.55, r * 1.05, r * 0.55, g);
+  spike(ctx, r * 0.35, -r * 0.62, -Math.PI / 2 + 0.25, r * 0.95, r * 0.5, g);
+  fig(ctx, B([[-r, r * 0.35], [-r * 0.92, -r * 0.45], [0, -r * 0.85], [r * 0.92, -r * 0.45], [r, r * 0.35], [0, r * 0.12]]), g, { rim: false });
+  ell(ctx, -r * 0.45, -r * 0.08, r * 0.14, r * 0.14); ctx.fillStyle = OUT; ctx.fill();
+  ell(ctx, r * 0.45, -r * 0.08, r * 0.14, r * 0.14); ctx.fill();
+  ctx.restore();
+}
+// Petite flamme stylisée (Infernal)
+function flame(ctx, x, y, s, ph = 0, lean = 0) {
+  const sw = Math.sin(ph) * s * 0.22 + lean * s;
+  const [c0, c1, c2] = V === 2 ? ['#7dff2a', '#4cc81a', '#e6ffb0'] : ['#ff6a1a', '#ff5a14', '#ffd23a'];
+  glow(ctx, x, y - s * 0.7, s * 1.7, c0, 0.42);
+  const outer = [[x - s * 0.62, y], [x - s * 0.62, y - s * 0.55], [x - s * 0.18 + sw * 0.4, y - s * 1.05], [x + sw, y - s * 1.8], [x + s * 0.3 + sw * 0.4, y - s * 0.95], [x + s * 0.62, y - s * 0.5], [x + s * 0.55, y]];
+  smooth(ctx, outer); paint(ctx, c1, 2);
+  const inner = outer.map(([px, py]) => [x + (px - x) * 0.55, y + (py - y) * 0.6]);
+  smooth(ctx, inner); ctx.fillStyle = c2; ctx.fill();
+}
+// Goutte de poison qui pend (Corrompu)
+function drip(ctx, x, y, len, ph = 0, col) {
+  const L = len * (0.75 + 0.25 * Math.sin(ph));
+  smooth(ctx, [[x - 3, y - 1], [x + 3, y - 1], [x + 1.8, y + L * 0.55], [x + 2.8, y + L], [x, y + L + 3], [x - 2.8, y + L], [x - 1.8, y + L * 0.55]]);
+  paint(ctx, col || PAL.goo, 2);
+  ell(ctx, x - 1, y + L - 0.3, 0.9, 1.3); ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.fill();
+}
+function sparkle(ctx, x, y, r, color = '#ffffff') {
   ctx.fillStyle = color;
   ctx.beginPath();
   ctx.moveTo(x, y - r);
@@ -180,1059 +363,2078 @@ function sparkle(ctx, x, y, r, color = '#ffffff', a = 1) {
   ctx.quadraticCurveTo(x, y, x - r, y);
   ctx.quadraticCurveTo(x, y, x, y - r);
   ctx.fill();
-  ctx.restore();
 }
-
-// =====================================================================
-//  1. Souris voyou
-// =====================================================================
-function drawRat(ctx, f) {
-  const fur = '#a9adcb', furD = '#7f82a6', pink = '#ff9dbb', red = '#ec3b4f';
-  const s = f ? 1 : -1, b = f ? -1.5 : 0;
-  // queue
-  limb(ctx, [[10, -14], [25, -9], [38, -16 + s], [42, -31], [36, -42 - s], [28, -40]], 6, 2.2,
-    vgrad(ctx, -44, -8, pink, 0.2, 0.25), 2.5);
-  // pied arrière
-  ell(ctx, 7 - 3 * s, -3.6, 8, 4.4); paint(ctx, shade(pink, -0.18), 2.5);
-  ctx.save(); ctx.translate(0, b);
-  // bras arrière
-  ell(ctx, 16, -27, 5, 6, 0.3); paint(ctx, furD, 2.5);
-  const body = () => smooth(ctx, [[-15, -30], [-6, -40], [9, -40], [18, -26], [15, -10], [2, -5], [-12, -8], [-18, -18]]);
-  form(ctx, body, fur, -2, -26, 22);
-  clipTo(ctx, body, () => { ell(ctx, -6, -17, 9, 11); fillA(ctx, '#ffffff', 0.4); });
-  ctx.restore();
-  // pied avant
-  ell(ctx, -9 + 3 * s, -3.6, 8.5, 4.6); paint(ctx, ball(ctx, -9 + 3 * s, -5, 9, pink, 0.3, 0.2), 2.5);
-  ctx.save(); ctx.translate(0, b * 1.4);
-  // oreilles
-  ear(ctx, 9, -66, 11, fur, pink, 0.3);
-  ear(ctx, -7, -71, 12.5, fur, pink, -0.2);
-  // tête
-  const head = () => smooth(ctx, [[-34, -46], [-27, -55], [-16, -63], [-1, -66], [11, -60], [14, -49], [9, -39], [-2, -34], [-15, -35], [-27, -39]]);
-  form(ctx, head, fur, -8, -54, 22);
-  clipTo(ctx, head, () => { ell(ctx, -24, -41, 11, 6.5, -0.2); fillA(ctx, '#ffffff', 0.38); });
-  // bandana
-  const band = () => smooth(ctx, [[-24, -55], [-14, -62], [0, -65.5], [12, -60.5], [14, -54], [1, -58.5], [-13, -56], [-23, -50]]);
-  band(); paint(ctx, vgrad(ctx, -66, -50, red, 0.25, 0.2), 2.5);
-  for (const [x, y] of [[-17, -56.5], [-7, -60.5], [4, -61], [-12, -59.6]].slice(0, 3)) { ell(ctx, x, y, 1.6, 1.4); ctx.fillStyle = '#fff'; ctx.fill(); }
-  limb(ctx, [[15, -58], [23, -63 + s], [31, -61 + s * 1.5]], 6, 3, red, 2.5);
-  limb(ctx, [[15, -56], [21, -50], [27, -46 - s]], 5.5, 3, shade(red, -0.12), 2.5);
-  ell(ctx, 15, -57, 4.4, 4); paint(ctx, red, 2.5);
-  // yeux
-  eye(ctx, -18.5, -49, 5, 6.4, { lid: fur, inner: 1, anger: 0.62 });
-  eye(ctx, -4.5, -50, 6.6, 8, { lid: fur, inner: -1, anger: 0.62 });
-  blush(ctx, -6, -39.5, 4.5, 2.6);
-  // museau
-  whiskers(ctx, -27, -42, -1, 13);
-  ell(ctx, -33.5, -46.5, 4.2, 3.8); paint(ctx, ball(ctx, -33.5, -47, 4.5, '#ff6f96'), 2.2);
-  gloss(ctx, -34.6, -47.8, 1.4, 1, 0.8);
-  // dents
-  rr(ctx, -28.5, -40.5, 3.4, 5.6, 1); paint(ctx, '#fffbea', 1.8);
-  rr(ctx, -25.1, -40.2, 3.4, 5.4, 1); paint(ctx, '#fffbea', 1.8);
-  ctx.beginPath(); ctx.moveTo(-30, -40.5); ctx.quadraticCurveTo(-22, -38, -16, -40.5);
-  ctx.lineWidth = 2; ctx.strokeStyle = OUT; ctx.stroke();
-  ctx.restore();
-  // bras avant (poing)
-  ctx.save(); ctx.translate(0, b);
-  limb(ctx, [[-3, -31], [-11, -28], [-17, -30 - s]], 7, 6, fur, 2.5);
-  ell(ctx, -19, -30.5 - s, 5.4, 5); paint(ctx, ball(ctx, -19, -31, 5.5, pink, 0.3, 0.2), 2.5);
-  ctx.restore();
-}
-
-// =====================================================================
-//  2. Bouledogue
-// =====================================================================
-function drawDog(ctx, f) {
-  const fur = '#c88443', furD = '#94582a', tan = '#f6d39e', dark = '#5b3218';
-  const s = f ? 1 : -1, b = f ? -1.2 : 0;
-  // queue
-  limb(ctx, [[37, -40 + b], [43, -47 + b], [44, -53 + b + s]], 6.5, 4.5, fur, 2.5);
-  // pattes arrière-plan
-  leg(ctx, 32 + 3 * s, -26, 11, furD, shade(tan, -0.2));
-  leg(ctx, -4 - 3 * s, -26, 11, furD, shade(tan, -0.2));
-  ctx.save(); ctx.translate(0, b);
-  const body = () => smooth(ctx, [[-18, -50], [0, -57], [24, -55], [40, -45], [42, -29], [34, -17], [12, -15], [-12, -17], [-22, -31]]);
-  form(ctx, body, fur, 12, -38, 32);
-  clipTo(ctx, body, () => {
-    ell(ctx, 6, -16, 20, 8); fillA(ctx, tan, 0.9);
-    ell(ctx, 26, -47, 8, 5, 0.3); fillA(ctx, dark, 0.35);
-  });
-  ctx.restore();
-  // pattes avant-plan
-  leg(ctx, 24 - 3 * s, -24, 12, fur, tan);
-  leg(ctx, -16 + 3 * s, -24, 13, fur, tan, -1);
-  ctx.save(); ctx.translate(0, b * 1.3);
-  // oreilles
-  smooth(ctx, [[-4, -73], [6, -82], [10, -71], [4, -66]]); paint(ctx, dark, 2.5);
-  // tête
-  const head = () => smooth(ctx, [[-49, -54], [-45, -68], [-31, -78], [-13, -78], [1, -71], [6, -57], [1, -42], [-13, -34], [-34, -32], [-47, -40]]);
-  form(ctx, head, fur, -22, -60, 30);
-  clipTo(ctx, head, () => {
-    smooth(ctx, [[-52, -52], [-44, -58], [-30, -55], [-21, -46], [-24, -34], [-38, -30], [-52, -36]]);
-    ctx.fillStyle = vgrad(ctx, -58, -30, tan, 0.2, 0.15); ctx.fill();
-    // rides
-    ctx.strokeStyle = rgba(dark, 0.55); ctx.lineWidth = 1.6;
-    for (const [x, y, w] of [[-30, -72, 7], [-28, -68, 9]]) {
-      ctx.beginPath(); ctx.moveTo(x - w, y + 1); ctx.quadraticCurveTo(x, y - 2.5, x + w, y + 1); ctx.stroke();
+// Particules d'ambiance de variante : paillettes d'or, bulles toxiques, braises
+function motes(ctx, a, seed, x0, y0, w, h, n = 4) {
+  if (!V) return;
+  const r = seeded(seed + 17);
+  for (let i = 0; i < n; i++) {
+    const px = x0 + r() * w, py0 = y0 + r() * h, off = r();
+    const ph = (a.f / 4 + off) % 1;
+    const y = py0 - ph * 16;
+    const sz = Math.sin(ph * Math.PI);
+    if (V === 1) { sparkle(ctx, px, y + ph * 10, 2 + sz * 3.2, '#fff2a0'); }
+    else if (V === 2) {
+      ell(ctx, px + Math.sin(ph * 6) * 1.5, y, 1.6 + sz * 1.8, 1.6 + sz * 1.8);
+      ctx.fillStyle = rgba('#9dff3a', 0.85); ctx.fill(); ctx.lineWidth = 1.3; ctx.strokeStyle = OUT; ctx.stroke();
+    } else {
+      glow(ctx, px, y, 5 + sz * 3, '#ff7a1a', 0.6);
+      ell(ctx, px, y, 1.2 + sz * 1.2, 1.2 + sz * 1.2); ctx.fillStyle = '#ffd27a'; ctx.fill();
     }
-  });
-  smooth(ctx, [[-36, -76], [-46, -83], [-46, -71], [-40, -68]]); paint(ctx, dark, 2.5);
-  // yeux + gros sourcils
-  eye(ctx, -38, -61, 5, 6, { lid: fur, inner: 1, anger: 0.6 });
-  eye(ctx, -21, -62, 7, 8, { lid: fur, inner: -1, anger: 0.6 });
-  brow(ctx, -44, -70, -33, -64, 4.2);
-  brow(ctx, -12, -72, -27, -67, 5);
-  // truffe
-  ell(ctx, -45, -53.5, 6.2, 4.3); paint(ctx, ball(ctx, -45, -54, 6, '#3c2430', 0.3, 0.2), 2.2);
-  gloss(ctx, -47, -55, 2, 1.1, 0.7);
-  // mâchoire inférieure (prognathe)
-  const jaw = () => smooth(ctx, [[-54, -44], [-42, -43.5], [-28, -44.5], [-24, -38], [-34, -31], [-50, -34]]);
-  jaw(); paint(ctx, '#7a2638', 2.5);
-  clipTo(ctx, jaw, () => {
-    ell(ctx, -38, -32, 8, 4); ctx.fillStyle = '#ff7b93'; ctx.fill();
-    for (let i = 0; i < 5; i++) { rr(ctx, -50 + i * 4.6, -45, 3.6, 3.6, 1); ctx.fillStyle = '#fffbea'; ctx.fill(); }
-  });
-  jaw(); paint(ctx, null, 2.5);
-  // babines
-  smooth(ctx, [[-53, -47], [-46, -50], [-38, -49], [-31, -47], [-38, -44], [-46, -43.5]]);
-  paint(ctx, tan, 2.2);
-  // crocs
-  for (const x of [-50, -32]) {
-    poly(ctx, [[x - 2.4, -44], [x + 2.4, -44], [x + 0.3, -52]]);
-    paint(ctx, '#fffbea', 1.8);
   }
-  blush(ctx, -16, -45, 4.5, 2.6, '#ff5d6c', 0.3);
-  ctx.restore();
-  // collier à pics
-  ctx.save(); ctx.translate(0, b * 1.15);
-  const cpts = [[-28, -33], [-12, -33], [0, -41], [5, -53]];
-  for (const t of [0.12, 0.38, 0.62, 0.86]) {
-    const p = along(cpts, t);
-    const nx = p.ty, ny = -p.tx; // normale vers l'extérieur (bas/droite)
-    const ox = -nx, oy = -ny;
-    poly(ctx, [[p.x + p.tx * 3.2 + ox * 2, p.y + p.ty * 3.2 + oy * 2], [p.x - p.tx * 3.2 + ox * 2, p.y - p.ty * 3.2 + oy * 2], [p.x + ox * 10, p.y + oy * 10]]);
-    paint(ctx, vgrad(ctx, p.y - 8, p.y + 8, '#d9deef', 0.4, 0.3), 2);
-  }
-  limb(ctx, cpts, 7.5, 7.5, vgrad(ctx, -56, -30, '#3b2a55', 0.25, 0.2), 2.5);
-  for (const t of [0.25, 0.5, 0.75]) { const p = along(cpts, t); ell(ctx, p.x, p.y, 1.6, 1.6); ctx.fillStyle = '#ffd34d'; ctx.fill(); }
-  ctx.restore();
+}
+// Petit badge du gang (patte de chat barrée)
+function gangBadge(ctx, x, y, r, base, mark) {
+  blob(ctx, x, y, r, base, { rim: false, lw: 2 });
+  ctx.fillStyle = mark;
+  ell(ctx, x, y + r * 0.18, r * 0.32, r * 0.26); ctx.fill();
+  for (const [dx, dy] of [[-0.36, -0.22], [-0.12, -0.42], [0.14, -0.42], [0.38, -0.22]]) { ell(ctx, x + dx * r, y + dy * r, r * 0.12, r * 0.14); ctx.fill(); }
+  ctx.beginPath(); ctx.moveTo(x - r * 0.62, y + r * 0.58); ctx.lineTo(x + r * 0.62, y - r * 0.62);
+  ctx.lineWidth = r * 0.22; ctx.strokeStyle = '#ff2a4a'; ctx.lineCap = 'round'; ctx.stroke();
 }
 
 // =====================================================================
-//  3. Aspi-Bot
+//  Animation : 4 poses (contact, passage, contact, passage)
 // =====================================================================
-function drawVacuum(ctx, f) {
-  const shell = '#c9d0ee', top = '#4a3f8a', red = '#ff2a3d';
-  const s = f ? 1 : -1, b = f ? -1 : 0;
+function anim(frame) {
+  const f = ((Math.floor(frame || 0) % 4) + 4) % 4;
+  const ph = f * Math.PI / 2;
+  return {
+    f, ph, s: Math.sin(ph), c: Math.cos(ph),
+    step: [1, 0, -1, 0][f],        // écart des pieds : +1 pied avant devant
+    lift: [0, 1, 0, -1][f],        // pied levé : 1 = avant, -1 = arrière
+    up: [0, 1, 0, 1][f],           // pose haute (passage)
+    sx: [1.045, 0.97, 1.045, 0.97][f],
+    sy: [0.955, 1.035, 0.955, 1.035][f],
+    hov: [0, -3, -5, -3][f],       // flottement (volants)
+    blink: f === 3,
+  };
+}
+// Écrasement / étirement autour des pieds
+function squash(ctx, a, k = 1) { ctx.scale(1 + (a.sx - 1) * k, 1 + (a.sy - 1) * k); }
+
+let PAL = null;
+
+// Basket montante (pied gauche = avant)
+function sneaker(ctx, x, y, col, toe = WHITE) {
+  const s = B([[x - 9, y - 1], [x - 8.6, y - 6], [x - 2, y - 9], [x + 5, y - 8], [x + 6.6, y - 2.5], [x + 3, y + 0.3], [x - 5, y + 0.3]]);
+  fig(ctx, s, col, {
+    glint: false, rim: false,
+    inside: () => {
+      ell(ctx, x - 6.6, y - 3.2, 4.2, 3.8); ctx.fillStyle = toe; ctx.fill();
+      ctx.fillStyle = toe; ctx.fillRect(x - 11, y - 2.2, 20, 4);
+      ctx.beginPath(); ctx.moveTo(x - 11, y - 2.2); ctx.lineTo(x + 9, y - 2.2); stroke(ctx, 1.6);
+    },
+  });
+}
+
+// =====================================================================
+//  1. Souris voyou — punk des rues : crête, gilet clouté, collier à pics, peigne-cran d'arrêt
+// =====================================================================
+const RAT = {
+  rim: '#ff4fa8',
+  fur: ['#a7a9cc', 'b'], belly: ['#e6e3f5', 'b'], skin: ['#ff9ec0', 'd'], nose: ['#ff5f93', 'd'],
+  vest: ['#3a2c4c', 'c'], jeans: ['#4b5598', 'c'], shoe: ['#ff3d7f', 'a'], hair: ['#ff3d9a', 'a'],
+  metal: ['#d9def0', 'm'], iris: ['#46307a', 'e'],
+};
+function drawRat(ctx, a, P) {
+  const st = a.step;
+  // queue
+  const tw = a.s * 3;
+  limb(ctx, [[10, -14], [24, -9], [35, -17], [37 + tw * 0.3, -31], [29 + tw, -39]], 6, 2.6, P.skin);
+  ctx.save(); ctx.translate(35.5, -21); ctx.rotate(-0.25);
+  fig(ctx, RR(-4.5, -2.6, 9, 5.2, 1.6), '#f6d7a8', { rim: false, glint: false, lw: 2 });
+  ctx.restore();
+  // jambes + baskets
+  const bx = 8 - st * 4, by = a.lift === -1 ? -4 : 0;
+  const fx = -6 + st * 4, fy = a.lift === 1 ? -4 : 0;
+  limb(ctx, [[6, -14], [bx + 1, by - 6]], 7.5, 6.5, shade(P.jeans, -0.18));
+  sneaker(ctx, bx, by, shade(P.shoe, -0.15));
+  limb(ctx, [[-4, -14], [fx + 1, fy - 6]], 7.5, 6.5, P.jeans);
+  sneaker(ctx, fx, fy, P.shoe);
+
+  ctx.save();
+  ctx.translate(0, -a.up * 1.2);
+  squash(ctx, a);
+  // bras arrière (main sur la hanche)
+  limb(ctx, [[9, -31], [17, -25], [15, -17]], 7, 6, shade(P.fur, -0.12));
+  blob(ctx, 14, -16, 4.4, shade(P.skin, -0.1), { rim: false });
+  // corps + gilet de cuir
+  const body = B([[-12, -31], [-4, -38], [8, -37], [15, -26], [14, -11], [5, -6], [-8, -7], [-14, -17]]);
+  fig(ctx, body, P.fur, {
+    crack: 1, cn: 2,
+    inside: () => {
+      ell(ctx, -6, -18, 8, 11); ctx.fillStyle = P.belly; ctx.fill();
+      fig(ctx, PL([[-3, -41], [20, -41], [20, -2], [1, -2], [3, -14], [-1, -27]]), P.vest, { rim: false, lw: 2.6 });
+      for (const [x, y] of [[4, -34], [9, -32], [13, -27], [6, -10], [11, -12]]) blob(ctx, x, y, 2, P.metal, { lw: 1.4, rim: false, glint: false });
+    },
+  });
+  // collier à pics
+  const col = [[-13, -36], [-3, -38.5], [8, -37]];
+  for (const t of [0.15, 0.5, 0.85]) { const p = along(col, t); spike(ctx, p.x, p.y + 1.5, Math.PI / 2 + 0.25 - t * 0.5, 6, 4.4, P.metal); }
+  limb(ctx, col, 5, 5, P.vest, { rim: false });
+  // bras avant + peigne à cran d'arrêt pointé vers le héros
+  const hx = -19, hy = -27 - a.up;
+  ctx.save(); ctx.translate(hx, hy); ctx.rotate(-1.22 + a.s * 0.1);
+  fig(ctx, B([[-3.2, -6], [3.2, -6], [3.2, -22], [0, -27], [-3.2, -22]], 0.15), P.metal, {
+    rim: false, lw: 2.4, glint: false, hi: 0.3,
+    inside: () => { ctx.fillStyle = shade(P.metal, -0.5); for (let y = -22; y < -7; y += 3) ctx.fillRect(0.6, y, 4, 1.4); },
+  });
+  fig(ctx, RR(-3, -7, 6, 12, 2.4), P.vest, { rim: false, lw: 2.4, glint: false });
+  ctx.restore();
+  limb(ctx, [[-3, -31], [-10, -22], [hx + 1, hy + 1]], 7.5, 6.5, P.fur);
+  blob(ctx, hx, hy, 5, P.skin, { rim: false });
+  if (V === 1) pauldron(ctx, -4, -33, 8.5, -0.3);
+  ctx.restore();
+
+  // ----- tête
+  ctx.save();
+  ctx.translate(0, -a.up * 2.2);
+  squash(ctx, a, 0.6);
+  const ear = (x, y, r, c) => fig(ctx, E(x, y, r, r * 0.96), c, { inside: () => { ell(ctx, x + r * 0.05, y + r * 0.12, r * 0.64, r * 0.6); ctx.fillStyle = P.skin; ctx.fill(); } });
+  ear(16, -64, 10.5, shade(P.fur, -0.08));
+  ear(5, -72, 12.5, P.fur);
+  // anneau d'oreille
+  for (const [w, c] of [[4.8, OUT], [2.2, P.metal]]) { ctx.beginPath(); ctx.arc(-6.5, -68, 3.4, 0.3, TAU - 1.3); stroke(ctx, w, c); }
+  const head = B([[-32, -49], [-27, -58], [-16, -66], [-2, -69], [10, -64], [15, -53], [11, -41], [0, -35], [-14, -36], [-26, -41]]);
+  fig(ctx, head, P.fur, {
+    crack: 2, cn: 1,
+    inside: () => { ell(ctx, -23, -43, 12, 7.5, -0.15); ctx.fillStyle = P.belly; ctx.fill(); },
+  });
+  // crête punk balayée vers l'avant (flammes en Infernal)
+  const sw = a.s * 1.4;
+  if (V === 3) {
+    flame(ctx, -21, -60, 7, a.ph, -0.35); flame(ctx, -11, -65, 9, a.ph + 1.5, -0.25); flame(ctx, 0, -66, 8, a.ph + 3, -0.15);
+  } else {
+    const hair = PL([[-23, -57], [-35 + sw, -70], [-21, -66], [-27 + sw, -85], [-12, -71], [-13 + sw, -93], [-2, -72], [3 + sw, -86], [7, -67], [3, -62], [-8, -64], [-18, -60]]);
+    fig(ctx, hair, P.hair, { lw: 2.8, size: 14, cx: -12, cy: -72 });
+  }
+  // yeux (malins) + sourcils
+  const blink = a.f === 3;
+  eye(ctx, -17.5, -51.5, 5.8, { ry: 7, skin: P.fur, inner: 1, anger: 0.4, lid: 0.22, iris: P.iris, blink });
+  eye(ctx, -3.5, -52.5, 7, { ry: 8.4, skin: P.fur, inner: -1, anger: 0.18, lid: 0.3, iris: P.iris, blink });
+  brow(ctx, -25, -61, -13, -58, 4.4);
+  brow(ctx, 6, -64.5, -8, -62.5, 4.6);
+  // museau
+  blob(ctx, -32, -50.5, 4.5, P.nose, { ry: 4, rim: false, lw: 2.4 });
+  for (const [x, w] of [[-28, 3.6], [-24.2, 3.6]]) { rr(ctx, x - w / 2, -44.5, w, 6, 1.2); paint(ctx, V === 1 && x > -26 ? P.gold : WHITE, 1.8); }
+  ctx.beginPath(); ctx.moveTo(-30, -44.2); ctx.quadraticCurveTo(-20, -40, -12, -42); ctx.quadraticCurveTo(-10, -43, -9.5, -45.5); stroke(ctx, 2.6);
+  fang(ctx, -14, -41.6, 4, 3.2);
+  blush(ctx, -8, -43.5, 4, 2.4);
+  ctx.beginPath(); ctx.moveTo(-27, -47); ctx.lineTo(-37, -49.5); ctx.moveTo(-27, -45.4); ctx.lineTo(-36.5, -44.2); stroke(ctx, 1.8);
+  if (V === 2) drip(ctx, -11, -40, 7, a.ph);
+  ctx.restore();
+  motes(ctx, a, 1, -30, -80, 60, 70);
+}
+
+// =====================================================================
+//  2. Bouledogue — videur : débardeur noir, grosse chaîne en or, gros poings, bracelets cloutés
+// =====================================================================
+const DOG = {
+  rim: '#ff9a3a',
+  fur: ['#d68f4c', 'b'], light: ['#f7dfb6', 'b'], ear: ['#6a3a22', 'b'], nose: ['#2e1d2a', 'k'],
+  top: ['#2f2840', 'c'], pants: ['#4a5290', 'c'], band: ['#2a2238', 'c'],
+  chain: ['#ffc83a', 'm'], stud: ['#d9def0', 'm'], iris: ['#5a3020', 'e'], mouth: ['#7a1f3a', 'k'],
+};
+function drawDog(ctx, a, P) {
+  const st = a.step;
+  const paw = (x, y, c) => fig(ctx, B([[x - 11, y], [x - 11, y - 6], [x - 4, y - 10], [x + 6, y - 9], [x + 8, y - 2], [x + 4, y + 0.4]]), c, { rim: false, glint: false });
+  const bx = 12 - st * 3.5, by = a.lift === -1 ? -4 : 0;
+  const fx = -12 + st * 3.5, fy = a.lift === 1 ? -4 : 0;
+  limb(ctx, [[9, -18], [bx, by - 5]], 12, 11, shade(P.pants, -0.2));
+  paw(bx, by, shade(P.light, -0.15));
+  limb(ctx, [[-8, -18], [fx, fy - 5]], 12, 11, P.pants);
+  paw(fx, fy, P.light);
+  // poing : boule + jointures (+ poing américain doré en Élite)
+  const fist = (x, y, r, c, front) => {
+    blob(ctx, x, y, r, c, { rim: front ? undefined : false, inside: () => { ctx.beginPath(); for (const dy of [-0.3, 0.15]) { ctx.moveTo(x - r * 0.95, y + dy * r); ctx.lineTo(x - r * 0.35, y + dy * r + 0.5); } stroke(ctx, 1.8); } });
+    if (V === 1 && front) { fig(ctx, RR(x - r - 2.5, y - r * 0.85, 5, r * 1.7, 2.4), P.gold, { rim: false, lw: 2.2 }); }
+  };
+  const band = (x, y, rot) => {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+    fig(ctx, RR(-8, -3.8, 16, 7.6, 2.5), P.band, { rim: false, lw: 2.4, glint: false });
+    for (const xx of [-4.5, 0, 4.5]) spike(ctx, xx, -3.6, -Math.PI / 2, 4.6, 3.6, P.stud, 1.6);
+    ctx.restore();
+  };
+
+  ctx.save();
+  ctx.translate(0, -a.up * 1.3);
+  ctx.rotate(st * 0.025);
+  squash(ctx, a);
+  // bras arrière
+  const sb = a.step * 2;
+  limb(ctx, [[20, -52], [29, -40], [27 - sb, -27]], 13, 11, shade(P.fur, -0.12));
+  band(27 - sb, -29, 0.1);
+  fist(27 - sb, -21, 7.5, shade(P.light, -0.12), false);
+  // torse en V + débardeur
+  const body = B([[-27, -50], [-16, -60], [14, -61], [27, -52], [24, -32], [17, -13], [0, -9], [-17, -13], [-24, -32]]);
+  fig(ctx, body, P.fur, {
+    crack: 3, cn: 2,
+    inside: () => {
+      fig(ctx, B([[-17, -57], [-10, -59], [-5, -47], [6, -47], [11, -60], [18, -57], [23, -32], [19, -4], [-19, -4], [-23, -32]], 0.35), P.top, { rim: false, lw: 2.6 });
+    },
+  });
+  // chaîne en or + médaillon os
+  const ch = [[-13, -56], [-7, -46], [0, -42], [7, -46], [12, -56]];
+  for (let i = 0; i <= 9; i++) {
+    const p = along(ch, i / 9);
+    fig(ctx, E(p.x, p.y, 3.2, 2.4, Math.atan2(p.ty, p.tx) + (i % 2) * 0.9), P.chain, { rim: false, lw: 1.8, glint: false, hi: 0.3 });
+  }
+  ctx.save(); ctx.translate(0, -36 + a.s * 0.8); ctx.rotate(a.s * 0.12);
+  fig(ctx, B([[-8, -3.4], [-4, -2.2], [4, -2.2], [8, -3.4], [10, 0], [8, 3.4], [4, 2.2], [-4, 2.2], [-8, 3.4], [-10, 0]], 0.6), P.chain, { rim: false, lw: 2.2, hi: 0.35 });
+  ctx.restore();
+  if (V === 1) pauldron(ctx, 20, -55, 9, 0.45);
+  // bras avant
+  limb(ctx, [[-21, -53], [-31, -40], [-29 + sb, -27]], 14, 12, P.fur, { crack: 4, cn: 1 });
+  band(-29 + sb, -29, -0.1);
+  fist(-29 + sb, -20, 8.5, P.light, true);
+  if (V === 1) pauldron(ctx, -22, -54, 10, -0.45);
+  ctx.restore();
+
+  // ----- tête (face de 3/4, bajoues et mâchoire prognathe)
+  ctx.save();
+  ctx.translate(0, -a.up * 2.4);
+  ctx.rotate(st * 0.03);
+  squash(ctx, a, 0.5);
+  const head = B([[-45, -77], [-42, -91], [-25, -98], [0, -99], [19, -95], [27, -81], [23, -66], [6, -59], [-18, -58], [-39, -63]]);
+  fig(ctx, head, P.fur, {
+    crack: 5, cn: 2,
+    inside: () => {
+      ctx.beginPath(); ctx.moveTo(-26, -95); ctx.quadraticCurveTo(-17, -98, -7, -95); ctx.moveTo(-23, -91); ctx.quadraticCurveTo(-16, -93, -9, -91);
+      ctx.moveTo(-23, -79); ctx.quadraticCurveTo(-21, -75, -22, -72); ctx.moveTo(-17, -79); ctx.quadraticCurveTo(-18, -75, -16, -72);
+      stroke(ctx, 2.2, rgba(OUT, 0.45));
+    },
+  });
+  // oreilles « en rose » repliées vers l'extérieur
+  const earF = (pts, c) => fig(ctx, B(pts, 0.4), c, { glint: false, rim: false, lw: 2.6 });
+  earF([[-30, -97], [-42, -101], [-51, -93], [-47, -86], [-40, -90]], P.ear);
+  earF([[10, -98], [22, -102], [31, -94], [29, -87], [21, -92]], shade(P.ear, -0.1));
+  // yeux + gros sourcils froncés
+  eye(ctx, -29, -80, 5.6, { ry: 6.4, skin: P.fur, inner: 1, anger: 0.6, lid: 0.18, iris: P.iris });
+  eye(ctx, -11, -81, 6.6, { ry: 7.4, skin: P.fur, inner: -1, anger: 0.6, lid: 0.18, iris: P.iris });
+  brow(ctx, -37, -89, -22, -84, 6.2);
+  brow(ctx, -1, -91, -17, -85.5, 6.6);
+  // mâchoire inférieure (devant) + bajoues
+  const jaw = B([[-42, -60], [-27, -58.5], [-11, -58.5], [0, -61], [-3, -51], [-20, -45.5], [-37, -49]]);
+  fig(ctx, jaw, P.light, { rim: undefined, lw: 2.8, glint: false, inside: () => { ctx.fillStyle = P.mouth; ctx.fillRect(-45, -66, 50, 9); } });
+  for (let i = 0; i < 6; i++) { rr(ctx, -35 + i * 5.4, -58.4, 4.4, 3.8, 1); paint(ctx, WHITE, 1.4); }
+  const jowl = (x, y, rx, c) => fig(ctx, E(x, y, rx, 9), c, { rim: false, lw: 2.8, glint: false });
+  jowl(-32, -66, 13, P.light);
+  jowl(-10, -66, 11.5, shade(P.light, -0.06));
+  fang(ctx, -40, -58, 8.5, 4.8, true); fang(ctx, -4, -58.5, 8, 4.6, true);
+  blob(ctx, -21, -72.5, 8, P.nose, { ry: 5.4, rim: false, lw: 2.4 });
+  if (V === 2) drip(ctx, -22, -47, 8, a.ph);
+  if (V === 1) for (const x of [-20, -8, 4]) spike(ctx, x, -96 + Math.abs(x + 8) * 0.12, -Math.PI / 2 + (x + 8) * 0.03, 9, 6, P.gold);
+  if (V === 3) { flame(ctx, -16, -97, 6.5, a.ph, -0.1); flame(ctx, 0, -98, 8, a.ph + 2); flame(ctx, 13, -94, 6, a.ph + 4, 0.1); }
+  ctx.restore();
+  motes(ctx, a, 2, -34, -100, 66, 84);
+}
+
+// =====================================================================
+//  3. Aspi-Bot — robot aspirateur : visage LED furieux, crête-brosse, balai rotatif
+// =====================================================================
+const VAC = {
+  rim: '#46e8ff',
+  shell: ['#cfd3ee', 'b'], top: ['#5b4ab8', 'c'], bump: ['#2f2a4e', 'c'], wheel: ['#2a2540', 'k'],
+  brush: ['#ff3d5a', 'a'], brush2: ['#ffb02e', 'a'], led: ['#ff2a48', 'e'], bulb: ['#ff2a48', 'g'],
+  plate: ['#9aa0c8', 'm'],
+};
+function drawVacuum(ctx, a, P) {
   // poussière derrière
-  ctx.save(); ctx.globalAlpha = 0.5;
-  for (const [x, y, r] of [[50 + s * 2, -6, 5], [57, -10 + s, 3.5], [46, -12, 3]]) { ell(ctx, x, y, r, r); ctx.fillStyle = '#cbbfae'; ctx.fill(); }
+  ctx.save(); ctx.globalAlpha = 0.65;
+  for (const [x, y, r] of [[46 + a.f * 2, -7, 5.5 - a.f * 0.6], [52 + a.f * 1.5, -13 + a.s, 3.5], [43, -14 - a.f, 2.6]]) { ell(ctx, x, y, r, r); paint(ctx, '#d8ccb8', 1.6); }
   ctx.restore();
   // roues
-  for (const x of [-25, 25]) {
-    ell(ctx, x, -6.5, 7, 6.5); paint(ctx, ball(ctx, x, -7, 7, '#3a3550', 0.25, 0.2), 2.5);
-    ell(ctx, x, -6.5, 2.6, 2.4); ctx.fillStyle = '#9aa0bf'; ctx.fill();
-    ctx.save(); ctx.translate(x, -6.5); ctx.rotate(f ? 0.8 : 0); ctx.strokeStyle = '#9aa0bf'; ctx.lineWidth = 1.4;
-    for (let i = 0; i < 3; i++) { ctx.rotate(Math.PI * 2 / 3); ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, 5); ctx.stroke(); }
+  for (const x of [-22, 24]) {
+    blob(ctx, x, -6, 6.5, P.wheel, { rim: false });
+    ctx.save(); ctx.translate(x, -6); ctx.rotate(-a.f * Math.PI / 4);
+    ctx.fillStyle = '#9aa0bf'; for (let i = 0; i < 4; i++) { ctx.rotate(Math.PI / 2); ctx.fillRect(-1, 0, 2, 4.4); }
+    ell(ctx, 0, 0, 2.2, 2.2); ctx.fill();
     ctx.restore();
   }
-  ctx.save(); ctx.translate(0, b);
-  const ty = -40, by = -17, rx = 45, ry = 10;
-  const yT = (x) => ty + ry * Math.sqrt(Math.max(0, 1 - (x / rx) ** 2));
-  const yB = (x) => by + ry * Math.sqrt(Math.max(0, 1 - (x / rx) ** 2));
-  const puck = () => {
-    ctx.beginPath();
-    ctx.ellipse(0, ty, rx, ry, 0, Math.PI, 0, false);
-    ctx.lineTo(rx, by);
-    ctx.ellipse(0, by, rx, ry, 0, 0, Math.PI, false);
-    ctx.closePath();
-  };
-  puck();
-  const g = ctx.createLinearGradient(-rx, 0, rx, 0);
-  g.addColorStop(0, shade(shell, 0.5)); g.addColorStop(0.35, shell); g.addColorStop(1, shade(shell, -0.35));
-  ctx.fillStyle = g; ctx.fill();
-  clipTo(ctx, puck, () => {
-    // reflet horizontal sur la tranche
-    ctx.beginPath(); for (let x = -rx; x <= rx; x += 3) ctx.lineTo(x, yT(x) + 1.5); for (let x = rx; x >= -rx; x -= 3) ctx.lineTo(x, yT(x) + 4);
-    fillA(ctx, '#ffffff', 0.55);
-    // pare-chocs caoutchouc
-    ctx.beginPath(); for (let x = -rx - 2; x <= rx + 2; x += 3) ctx.lineTo(x, yB(x) - 5.5); ctx.lineTo(rx + 2, 12); ctx.lineTo(-rx - 2, 12); ctx.closePath();
-    ctx.fillStyle = vgrad(ctx, -12, 0, '#3b3766', 0.15, 0.25); ctx.fill();
-  });
-  puck(); paint(ctx, null, LW);
-  // dents sur le pare-chocs (sourire mauvais)
-  for (let x = -32; x <= 8; x += 6.6) {
-    const y = yB(x) - 5.5;
-    poly(ctx, [[x - 3, y + 0.8], [x + 3, y + 0.8], [x, y - 4.8]]);
-    paint(ctx, '#fffbea', 1.6);
-  }
-  // écran-visière
-  const scr = () => {
-    ctx.beginPath();
-    for (let x = -37; x <= 13; x += 2.5) ctx.lineTo(x, yT(x) + 2.5);
-    for (let x = 13; x >= -37; x -= 2.5) ctx.lineTo(x, yT(x) + 14);
-    ctx.closePath();
-  };
-  scr(); paint(ctx, '#1d1830', 2.4);
-  // yeux LED fâchés
-  clipTo(ctx, scr, () => {
-    for (const [x, inner] of [[-24, 1], [0, -1]]) {
-      const c = yT(x) + 8.5;
-      glow(ctx, x, c, 15, red, 0.9);
-      const pts = inner > 0
-        ? [[x - 8, c - 4.5], [x + 8, c], [x + 7, c + 4], [x - 7.5, c + 4]]
-        : [[x + 8, c - 4.5], [x - 8, c], [x - 7, c + 4], [x + 7.5, c + 4]];
-      poly(ctx, pts); ctx.fillStyle = '#ff3d4f'; ctx.fill();
-      poly(ctx, pts.map(([px, py]) => [x + (px - x) * 0.55, c + 1 + (py - c - 1) * 0.45])); ctx.fillStyle = '#ffe3e6'; ctx.fill();
-    }
-    ctx.fillStyle = rgba('#ffffff', 0.08); for (let y = -36; y < -10; y += 2.4) ctx.fillRect(-40, y, 56, 0.9);
-  });
-  scr(); paint(ctx, null, 2.4);
-  // dessus
-  ell(ctx, 0, ty, rx, ry);
-  paint(ctx, ball(ctx, -6, ty - 2, rx, shade(shell, 0.1), 0.4, 0.2), LW);
-  ell(ctx, 3, ty + 0.5, rx - 9, ry - 3);
-  paint(ctx, ball(ctx, -8, ty - 4, rx - 6, top, 0.35, 0.25), 2.5);
-  gloss(ctx, -14, ty - 3, 12, 2.2, 0.45, -0.05);
-  // bouton
-  ell(ctx, 10, ty - 1, 6, 2.6); paint(ctx, '#2a2346', 2);
-  glow(ctx, 10, ty - 1.5, 7, red, f ? 0.9 : 0.6);
-  ell(ctx, 10, ty - 1.2, 2.8, 1.3); ctx.fillStyle = '#ffd0d4'; ctx.fill();
-  // antenne
-  const ax = 22, ay = -47;
-  limb(ctx, [[ax, ay], [ax + 3 + s, ay - 9], [ax + 7 + s * 2, ay - 15]], 2.6, 2, '#9aa0bf', 2);
-  glow(ctx, ax + 7 + s * 2, ay - 16, 11, red, 0.9);
-  ell(ctx, ax + 7 + s * 2, ay - 16.5, 4.3, 4.3); paint(ctx, ball(ctx, ax + 7 + s * 2, ay - 16.5, 4.5, red, 0.5, 0.2), 2);
-  gloss(ctx, ax + 5.8 + s * 2, ay - 18, 1.4, 1, 0.9);
-  ctx.restore();
-}
-
-// =====================================================================
-//  4. Concombre maléfique
-// =====================================================================
-function drawCucumber(ctx, f) {
-  const green = '#3fb44a', dark = '#1f6b2d';
-  const s = f ? 1 : -1, b = f ? -1.5 : 0;
-  // pieds
-  for (const [x, dx] of [[-8, 3 * s], [8, -3 * s]]) {
-    limb(ctx, [[x, -10], [x + dx * 0.5, -4]], 4.5, 4.5, dark, 2.2);
-    ell(ctx, x - 3 + dx, -3, 6.5, 3.4); paint(ctx, ball(ctx, x - 3 + dx, -4, 6, '#2d8a3a', 0.3, 0.2), 2.5);
-  }
-  ctx.save(); ctx.translate(0, b);
-  // bras arrière
-  limb(ctx, [[16, -44], [24, -50], [27, -57 - s]], 4.4, 3.8, '#2f9a3c', 2.2);
-  ell(ctx, 27.5, -59 - s, 3.8, 3.8); paint(ctx, ball(ctx, 27.5, -60 - s, 4, '#3fb44a'), 2.2);
-  // corps
-  const body = () => smooth(ctx, [[-6, -96], [7, -92], [16, -76], [19, -52], [18, -27], [12, -11], [0, -7], [-12, -10], [-18, -25], [-20, -52], [-19, -76], [-15, -90]]);
-  form(ctx, body, green, -6, -60, 40, { light: 0.35, dark: 0.25 });
-  clipTo(ctx, body, () => {
-    // rayures
-    ctx.strokeStyle = rgba('#b9f07a', 0.35); ctx.lineWidth = 3.5;
-    for (const x of [-10, 0, 10]) { ctx.beginPath(); ctx.moveTo(x - 1, -96); ctx.quadraticCurveTo(x + 2, -50, x * 0.8, -6); ctx.stroke(); }
-    // bosses
-    const rnd = seeded(7);
-    for (let i = 0; i < 16; i++) {
-      const x = -16 + rnd() * 32, y = -92 + rnd() * 82;
-      if (y > -78 && y < -38 && x < 12) continue; // visage
-      ell(ctx, x, y, 1.9, 1.6); ctx.fillStyle = rgba(dark, 0.75); ctx.fill();
-      ell(ctx, x - 0.5, y - 0.6, 0.8, 0.6); ctx.fillStyle = rgba('#e8ffc0', 0.8); ctx.fill();
-    }
-    ell(ctx, 6, -26, 14, 18); fillA(ctx, '#d6f78f', 0.22);
-  });
-  // tige
-  limb(ctx, [[-6, -94], [-5, -100], [-1, -103]], 5, 3.5, '#8a6a2e', 2.2);
-  ctx.save(); ctx.strokeStyle = '#2d8a3a'; ctx.lineWidth = 1.8;
-  ctx.beginPath(); ctx.moveTo(-4, -99); ctx.bezierCurveTo(4, -104, 10, -99, 6, -96); ctx.bezierCurveTo(3, -94, 2, -98, 5, -98.5); ctx.stroke(); ctx.restore();
-  gloss(ctx, -12, -78, 3, 9, 0.45, 0.1);
-  // yeux + sourcils
-  eye(ctx, -11, -64, 6.2, 7.5, { lid: green, inner: 1, anger: 0.5, iris: '#c0261f' });
-  eye(ctx, 5, -65, 7.4, 9, { lid: shade(green, -0.05), inner: -1, anger: 0.5, iris: '#c0261f' });
-  brow(ctx, -19, -76, -7, -70, 4.5, dark);
-  brow(ctx, 13, -79, -1, -72, 5, dark);
-  // bouche diabolique
-  const mouth = () => smooth(ctx, [[-16, -50], [-6, -48], [6, -49], [13, -52], [10, -44], [0, -39], [-10, -41]]);
-  mouth(); paint(ctx, '#6e1730', 2.5);
-  clipTo(ctx, mouth, () => {
-    ell(ctx, 0, -38, 8, 4.5); ctx.fillStyle = '#ff6d8a'; ctx.fill();
-    ctx.fillStyle = '#fffbea';
-    for (let i = 0; i < 5; i++) { const x = -14 + i * 6; poly(ctx, [[x, -52], [x + 5, -52], [x + 2.5, -46 + (i % 2)]]); ctx.fill(); }
-  });
-  mouth(); paint(ctx, null, 2.5);
-  blush(ctx, -15, -53, 3.5, 2, '#ff5d8f', 0.3);
-  ctx.restore();
-  // bras avant
-  ctx.save(); ctx.translate(0, b);
-  limb(ctx, [[-17, -40], [-25, -36 + s], [-30, -38 + s]], 4.6, 4, '#3aa847', 2.2);
-  ell(ctx, -31.5, -38.5 + s, 3.8, 3.8); paint(ctx, ball(ctx, -31.5, -39, 4, '#3fb44a'), 2.2);
-  ctx.restore();
-}
-
-// =====================================================================
-//  5. Pigeon pirate
-// =====================================================================
-function drawPigeon(ctx, f) {
-  const gray = '#9ca6c4', wing = '#7f88a8', neck = '#4fc49b', neck2 = '#a072e0', foot = '#ff7f86';
-  const s = f ? 1 : -1, b = f ? -1.5 : 0;
-  // pattes
-  for (const [x, dx, c] of [[6, -3 * s, shade(foot, -0.15)], [-5, 3 * s, foot]]) {
-    limb(ctx, [[x, -14], [x + dx * 0.5, -6], [x + dx, -2]], 3.2, 3, c, 2);
-    for (const a of [-0.9, 0, 0.9]) {
-      limb(ctx, [[x + dx, -2], [x + dx - 6 * Math.cos(a) + 1, -1.2 + Math.sin(a) * 0.3]], 2.6, 2.2, c, 1.6);
-    }
-  }
-  ctx.save(); ctx.translate(0, b);
-  // queue
-  for (const [dy, c] of [[-4, shade(wing, -0.15)], [2, wing], [7, shade(wing, -0.1)]]) {
-    smooth(ctx, [[16, -26 + dy * 0.3], [34, -24 + dy], [41, -20 + dy * 1.2], [36, -16 + dy], [16, -18 + dy * 0.3]]);
-    paint(ctx, c, 2.5);
-  }
-  limb(ctx, [[36, -22], [40, -16]], 3, 3, OUT, 0);
-  const body = () => smooth(ctx, [[-19, -36], [-14, -20], [0, -12], [16, -15], [27, -24], [22, -36], [8, -44], [-8, -46]]);
-  form(ctx, body, gray, 2, -30, 26);
-  clipTo(ctx, body, () => { ell(ctx, -10, -24, 10, 10); fillA(ctx, '#ffffff', 0.25); });
-  // aile
-  const w = () => smooth(ctx, [[-2, -36], [12, -40], [26, -32], [30, -22], [14, -21], [0, -27]]);
-  form(ctx, w, wing, 12, -32, 18, { lw: 2.5 });
-  clipTo(ctx, w, () => {
-    ctx.strokeStyle = '#2b2440'; ctx.lineWidth = 3;
-    for (const x of [14, 21]) { ctx.beginPath(); ctx.moveTo(x - 3, -40); ctx.quadraticCurveTo(x + 2, -30, x - 1, -20); ctx.stroke(); }
-  });
-  ctx.restore();
-  ctx.save(); ctx.translate(0, b * 1.5);
-  // cou irisé
-  const neckP = () => smooth(ctx, [[-22, -46], [-14, -56], [0, -54], [4, -42], [-6, -34], [-18, -36]]);
-  neckP();
-  const ng = ctx.createLinearGradient(-20, -54, 4, -36);
-  ng.addColorStop(0, neck); ng.addColorStop(0.5, neck2); ng.addColorStop(1, shade(gray, -0.1));
-  paint(ctx, ng, 2.5);
-  // tête
-  const head = () => smooth(ctx, [[-27, -58], [-22, -69], [-10, -74], [2, -70], [7, -58], [2, -47], [-10, -43], [-22, -47]]);
-  form(ctx, head, gray, -10, -58, 18);
-  // bec
-  const beak = () => smooth(ctx, [[-25, -61], [-34, -59], [-40, -55], [-36, -52.5], [-26, -53]]);
-  beak(); paint(ctx, vgrad(ctx, -61, -52, '#8a8ca6', 0.35, 0.25), 2.4);
-  ctx.beginPath(); ctx.moveTo(-38, -55.5); ctx.lineTo(-27, -56); ctx.lineWidth = 1.4; ctx.strokeStyle = OUT; ctx.stroke();
-  ell(ctx, -27, -60.5, 4, 2.8, -0.2); paint(ctx, '#f6f3ff', 1.8);
-  // œil (le bon)
-  eye(ctx, -5, -59, 7.4, 8.8, { lid: gray, inner: -1, anger: 0.6, iris: '#ff8a1f' });
-  // cache-œil + lanière
-  ctx.strokeStyle = OUT; ctx.lineWidth = 2.4;
-  ctx.beginPath(); ctx.moveTo(-23, -66); ctx.quadraticCurveTo(-12, -72, 6, -64); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(-15, -56); ctx.quadraticCurveTo(-6, -48, 6, -52); ctx.stroke();
-  smooth(ctx, [[-23, -66], [-14, -66], [-13, -58], [-17, -54], [-22, -56]]);
-  paint(ctx, ball(ctx, -18, -61, 6, '#4a2f3c', 0.35, 0.2), 2.2);
-  ctx.save(); ctx.setLineDash([1.4, 1.4]); ctx.lineWidth = 0.9; ctx.strokeStyle = rgba('#d9b38a', 0.9);
-  smooth(ctx, [[-21.5, -64.2], [-15, -64.2], [-14.6, -58.5], [-17.5, -56], [-20.6, -57.4]]); ctx.stroke(); ctx.restore();
-  gloss(ctx, -19.5, -62.5, 1.6, 1.1, 0.45);
-  blush(ctx, -2, -48, 3.8, 2.2, '#ff7da2', 0.38);
-  // chapeau de pirate (tricorne)
-  ctx.save(); ctx.translate(-8, -72); ctx.rotate(-0.14 + s * 0.03);
-  const hat = () => smooth(ctx, [[-16, -2], [-11, -5], [-5, -12], [5, -12], [11, -5], [16, -2], [9, 1], [0, -1.5], [-9, 1]]);
-  form(ctx, hat, '#3b2d52', 0, -5, 14, { lw: 2.5 });
-  hat(); ctx.save(); ctx.clip(); ctx.strokeStyle = '#ffcc40'; ctx.lineWidth = 2.2; ctx.beginPath(); ctx.moveTo(-15, -1.5); ctx.quadraticCurveTo(0, -5.5, 15, -1.5); ctx.stroke(); ctx.restore();
-  hat(); paint(ctx, null, 2.5);
-  // mini tête de mort
-  ell(ctx, 0, -7.2, 2.7, 2.4); ctx.fillStyle = '#fff'; ctx.fill();
-  rr(ctx, -1.6, -5.6, 3.2, 2, 0.6); ctx.fill();
-  ctx.fillStyle = OUT; ell(ctx, -0.95, -7.4, 0.75, 0.75); ctx.fill(); ell(ctx, 0.95, -7.4, 0.75, 0.75); ctx.fill();
-  ctx.restore();
-  ctx.restore();
-}
-
-// =====================================================================
-//  6. Crabe pinceur
-// =====================================================================
-function claw(ctx, x, y, rot, open, color) {
-  ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
-  const lower = () => smooth(ctx, [[3, -4], [9, -12], [11, -22], [14, -21], [15, -11], [10, -1]]);
-  ctx.save(); ctx.translate(6, -4); ctx.rotate(open); ctx.translate(-6, 4);
-  form(ctx, lower, shade(color, -0.05), 9, -12, 10, { lw: 2.5 });
-  ctx.restore();
-  const palm = () => smooth(ctx, [[-10, 6], [-11, -6], [-9, -18], [-5, -27], [0, -25], [-1, -15], [3, -8], [8, -6], [10, 4], [2, 10]]);
-  form(ctx, palm, color, -2, -6, 15, { lw: 2.5 });
-  gloss(ctx, -6, -6, 2, 6, 0.45, 0.1);
-  for (const [px, py] of [[-4, -20], [5, 2]]) { ell(ctx, px, py, 1.4, 1.2); ctx.fillStyle = rgba('#ffffff', 0.6); ctx.fill(); }
-  ctx.restore();
-}
-function drawCrab(ctx, f) {
-  const red = '#f04a3a', redD = '#b8262a';
-  const s = f ? 1 : -1, b = f ? -1 : 0;
-  // pattes
-  for (const side of [-1, 1]) {
-    for (let i = 0; i < 3; i++) {
-      const up = ((i + (side > 0 ? 1 : 0)) % 2 ? s : -s) * 1.6;
-      const x0 = side * (16 + i * 6), y0 = -18 + i * 2;
-      const kx = side * (30 + i * 7), ky = -24 + i * 3 - up;
-      const tx = side * (34 + i * 8), ty = -1 - Math.max(0, up);
-      limb(ctx, [[x0, y0], [kx, ky], [tx, ty]], 6, 2.4, i === 1 ? red : redD, 2.5);
-    }
-  }
-  ctx.save(); ctx.translate(0, b);
-  // bras
-  limb(ctx, [[-22, -28], [-34, -30], [-40, -40]], 7, 6, redD, 2.5);
-  limb(ctx, [[22, -28], [34, -30], [40, -40]], 7, 6, redD, 2.5);
-  // carapace
-  const shell = () => smooth(ctx, [[-35, -24], [-30, -36], [-18, -43], [0, -45], [18, -43], [30, -36], [35, -24], [28, -13], [0, -9], [-28, -13]]);
-  form(ctx, shell, red, -4, -30, 36);
-  clipTo(ctx, shell, () => {
-    ell(ctx, 0, -12, 30, 6); fillA(ctx, '#ffd0a8', 0.45);
-    const rnd = seeded(3);
-    for (let i = 0; i < 7; i++) { ell(ctx, -26 + rnd() * 52, -40 + rnd() * 8, 1.6 + rnd(), 1.3 + rnd()); fillA(ctx, '#ffb69a', 0.7); }
-  });
-  // petits pics sur le bord
-  for (const x of [-33, 33]) { poly(ctx, [[x, -30], [x + Math.sign(x) * 5, -33], [x - Math.sign(x) * 1, -36]]); paint(ctx, red, 2); }
-  // yeux pédonculés
-  for (const [x, r, inner, h] of [[-11, 6.4, 1, 0], [7, 7.2, -1, 1]]) {
-    limb(ctx, [[x + 1, -40], [x, -48 - h]], 4, 3.5, red, 2.2);
-    eye(ctx, x, -55 - h, r, r * 1.1, { lid: red, inner, anger: 0.62 });
-  }
-  brow(ctx, -19, -64.5, -7, -61, 3.6);
-  brow(ctx, 16, -67, 3, -63, 4);
-  // bouche
-  const m = () => smooth(ctx, [[-12, -24], [-4, -27], [4, -27], [10, -24], [4, -20], [-6, -20]]);
-  m(); paint(ctx, '#6e1730', 2.2);
-  clipTo(ctx, m, () => { ctx.fillStyle = '#fffbea'; for (let i = 0; i < 4; i++) { poly(ctx, [[-10 + i * 5, -27.5], [-6 + i * 5, -27.5], [-8 + i * 5, -23.5]]); ctx.fill(); } });
-  m(); paint(ctx, null, 2.2);
-  blush(ctx, -20, -26, 4, 2.4, '#ff8fb0', 0.45); blush(ctx, 18, -26, 4, 2.4, '#ff8fb0', 0.45);
-  // pinces levées
-  claw(ctx, -42, -44, -0.35, f ? 0.25 : 0.05, red);
-  ctx.save(); ctx.scale(-1, 1); claw(ctx, -42, -44, -0.35, f ? 0.05 : 0.25, red); ctx.restore();
-  ctx.restore();
-}
-
-// =====================================================================
-//  7. Frelon (en vol)
-// =====================================================================
-function drawWasp(ctx, f) {
-  const yel = '#ffc21a', blk = '#3a2840', legC = '#8a5a3c';
-  const s = f ? 1 : -1, b = f ? -3 : 0;
-  ctx.save(); ctx.translate(0, b);
-  // ailes arrière
-  const wingC = rgba('#d6f2ff', 0.55);
-  const wingA = f ? -0.25 : 0.15;
-  for (const [x, y, rx, ry, rot] of [[18, -104, 21, 8, -0.7 + wingA], [8, -108, 24, 9.5, -1.15 + wingA]]) {
-    ctx.save(); ctx.translate(2, -92); ctx.rotate(wingA * 0.6); ctx.translate(-2, 92);
-    ell(ctx, x, y, rx, ry, rot); paint(ctx, wingC, 2.2, rgba(OUT, 0.85));
-    ctx.save(); ell(ctx, x, y, rx, ry, rot); ctx.clip();
-    ctx.strokeStyle = rgba('#7fa8d8', 0.6); ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(2, -92); ctx.lineTo(x + Math.cos(rot) * rx, y + Math.sin(rot) * rx); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(2, -92); ctx.lineTo(x + Math.cos(rot + 0.25) * rx * 0.8, y + Math.sin(rot + 0.25) * rx * 0.8); ctx.stroke();
-    gloss(ctx, x - 3, y - 2, rx * 0.5, ry * 0.25, 0.5, rot);
-    ctx.restore();
-    ctx.restore();
-  }
-  // pattes pendantes
-  for (const [x, dx] of [[-4, -4], [2, -2], [8, 1]]) {
-    limb(ctx, [[x, -74], [x + dx - 2, -65], [x + dx + 1 + s, -57]], 3.6, 2.6, legC, 1.8);
-  }
-  // dard
-  smooth(ctx, [[37.5, -59], [44.5, -63], [47, -54], [49.5, -46.5], [44, -52]]); paint(ctx, vgrad(ctx, -63, -46, '#e8e4f4', 0.3, 0.3), 2.2);
-  // abdomen
-  const abd = () => smooth(ctx, [[6, -88], [22, -90], [38, -80], [44, -64], [38, -56], [24, -62], [10, -72]]);
-  form(ctx, abd, yel, 22, -78, 24);
-  clipTo(ctx, abd, () => {
-    ctx.fillStyle = blk;
-    for (const t of [0.32, 0.58, 0.82]) {
-      const cx = 6 + t * 38, cy = -88 + t * 30;
-      ctx.save(); ctx.translate(cx, cy); ctx.rotate(0.65); rr(ctx, -40, -3, 80, 6.5, 2); ctx.fill(); ctx.restore();
-    }
-    ell(ctx, 18, -82, 12, 4, 0.5); fillA(ctx, '#ffffff', 0.25);
-  });
-  abd(); paint(ctx, null, LW);
-  // thorax
-  const th = () => ell(ctx, 3, -83, 12.5, 11.5);
-  form(ctx, th, '#5b3a2e', 3, -83, 13);
-  clipTo(ctx, th, () => { ell(ctx, 0, -86, 7, 4); fillA(ctx, yel, 0.6); });
-  // tête
-  const head = () => smooth(ctx, [[-36, -80], [-32, -95], [-20, -101], [-7, -97], [-3, -84], [-8, -71], [-22, -67], [-33, -71]]);
-  form(ctx, head, yel, -20, -86, 20);
-  clipTo(ctx, head, () => {
-    smooth(ctx, [[-30, -94], [-20, -101], [-6, -98], [-4, -90], [-14, -93], [-24, -92]]);
-    fillA(ctx, blk, 0.9);
-  });
-  head(); paint(ctx, null, LW);
-  // antennes
-  limb(ctx, [[-24, -99], [-30, -108], [-38, -112 + s]], 3, 2.4, legC, 1.8);
-  limb(ctx, [[-14, -100], [-16, -110], [-22, -116 + s]], 3, 2.4, legC, 1.8);
-  ell(ctx, -38.5, -112 + s, 2.6, 2.6); paint(ctx, yel, 1.8); ell(ctx, -22.5, -116 + s, 2.6, 2.6); paint(ctx, yel, 1.8);
-  // yeux
-  eye(ctx, -28, -84, 6, 7.6, { lid: yel, inner: 1, anger: 0.6, iris: '#d1213a' });
-  eye(ctx, -13, -85, 7.6, 9, { lid: yel, inner: -1, anger: 0.6, iris: '#d1213a' });
-  // mandibules
-  limb(ctx, [[-30, -72], [-35, -69], [-34, -64.5]], 4, 2.2, legC, 1.8);
-  limb(ctx, [[-24, -70], [-27, -65], [-25, -61.5]], 4, 2.2, legC, 1.8);
-  blush(ctx, -10, -74, 3.5, 2, '#ff6a5a', 0.35);
-  // ailes avant
-  ctx.save(); ctx.translate(2, -92); ctx.rotate(wingA); ctx.translate(-2, 92);
-  ell(ctx, 4, -112, 13, 6, -1.45); paint(ctx, rgba('#e8f8ff', 0.45), 2, rgba(OUT, 0.8));
-  ctx.restore();
-  ctx.restore();
-}
-
-// =====================================================================
-//  8. Taupe mineuse
-// =====================================================================
-function drawMole(ctx, f) {
-  const fur = '#7b6896', pink = '#ff9bb5', paw = '#ffb8c9';
-  const s = f ? 1 : -1, b = f ? -1.5 : 0;
-  // pieds
-  ell(ctx, 8 - 3 * s, -3.5, 8, 4.2); paint(ctx, shade(paw, -0.15), 2.5);
-  ctx.save(); ctx.translate(0, b);
-  // queue
-  limb(ctx, [[20, -14], [27, -15], [30, -19 + s]], 4, 3, pink, 2.2);
-  // pioche sur l'épaule (derrière)
-  ctx.save(); ctx.translate(16, -34); ctx.rotate(0.55 + s * 0.05);
-  rr(ctx, -2.2, -36, 4.4, 44, 2); paint(ctx, vgrad(ctx, -36, 8, '#c27a3c', 0.25, 0.25), 2.2);
-  smooth(ctx, [[-16, -29], [-8, -37], [0, -39], [8, -37], [16, -29], [7, -33], [0, -34], [-7, -33]]);
-  paint(ctx, vgrad(ctx, -40, -29, '#cfd6e8', 0.4, 0.3), 2.4);
-  rr(ctx, -3.4, -40, 6.8, 7, 2); paint(ctx, '#8a5a3c', 2);
-  ctx.restore();
-  // corps
-  const body = () => smooth(ctx, [[-22, -40], [-12, -56], [6, -58], [20, -46], [24, -26], [16, -8], [0, -4], [-16, -7], [-24, -22]]);
-  form(ctx, body, fur, -2, -34, 30);
-  clipTo(ctx, body, () => { ell(ctx, -6, -18, 12, 13); fillA(ctx, '#d9cde8', 0.45); });
-  ctx.restore();
-  ell(ctx, -10 + 3 * s, -3.6, 8.5, 4.5); paint(ctx, ball(ctx, -10 + 3 * s, -5, 8.5, paw, 0.3, 0.2), 2.5);
-  ctx.save(); ctx.translate(0, b * 1.3);
-  // tête
-  const head = () => smooth(ctx, [[-34, -50], [-26, -58], [-12, -66], [4, -66], [14, -56], [12, -44], [0, -38], [-16, -39], [-28, -43]]);
-  form(ctx, head, fur, -10, -54, 24);
-  clipTo(ctx, head, () => { ell(ctx, -24, -45, 10, 6, -0.2); fillA(ctx, '#e6d8f3', 0.4); });
-  // casque
-  const helm = () => smooth(ctx, [[-27, -60], [-22, -73], [-8, -81], [8, -78], [17, -67], [18, -60], [0, -62.5], [-16, -62]]);
-  form(ctx, helm, '#ffc93a', -6, -72, 22, { lw: LW });
-  clipTo(ctx, helm, () => { ctx.strokeStyle = rgba('#b27a10', 0.6); ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(-4, -81); ctx.quadraticCurveTo(2, -72, 2, -62); ctx.stroke(); });
-  smooth(ctx, [[-30, -60.5], [-10, -64], [12, -62], [21, -59], [18, -56.5], [0, -58.5], [-24, -57]]);
-  paint(ctx, vgrad(ctx, -64, -56, '#f2a91f', 0.2, 0.2), 2.5);
-  // lampe
-  rr(ctx, -27, -74, 10, 9, 2.5); paint(ctx, vgrad(ctx, -74, -65, '#c9cfe4', 0.35, 0.3), 2.2);
-  glow(ctx, -31, -69.5, f ? 26 : 22, '#fff27a', 0.75);
-  ell(ctx, -27.5, -69.5, 3, 4.6); paint(ctx, '#fffbd0', 2, OUT);
-  ell(ctx, -27.8, -70, 1.4, 2.2); ctx.fillStyle = '#ffffff'; ctx.fill();
-  // yeux
-  eye(ctx, -19, -52.5, 4.6, 5.6, { lid: fur, inner: 1, anger: 0.55 });
-  eye(ctx, -7, -53.5, 5.6, 6.8, { lid: fur, inner: -1, anger: 0.55 });
-  brow(ctx, -25, -59.5, -16, -56.5, 3.2);
-  brow(ctx, 0, -61, -10, -57.5, 3.6);
-  blush(ctx, -5, -44, 4, 2.4);
-  // museau
-  whiskers(ctx, -30, -46, -1, 11, 0.5);
-  ell(ctx, -34, -48, 6, 5.2); paint(ctx, ball(ctx, -34, -49, 6, pink, 0.35, 0.25), 2.5);
-  gloss(ctx, -36, -50, 2, 1.3, 0.8);
-  ctx.beginPath(); ctx.moveTo(-28, -42); ctx.quadraticCurveTo(-24, -40, -20, -42.5); ctx.lineWidth = 2; ctx.strokeStyle = OUT; ctx.stroke();
-  rr(ctx, -27, -42, 3, 3.6, 0.8); paint(ctx, '#fffbea', 1.5);
-  ctx.restore();
-  // main sur le manche de la pioche
-  ctx.save(); ctx.translate(0, b);
-  ell(ctx, 19, -40, 6, 5.6); paint(ctx, ball(ctx, 19, -41, 6, paw, 0.3, 0.2), 2.5);
-  // grosses pattes à griffes (avant)
-  const bigPaw = (px, py, r, rot) => {
-    for (let i = 0; i < 3; i++) {
-      const a = rot + (i - 1) * 0.42;
-      const c = Math.cos(a), sn = Math.sin(a);
-      const x0 = px + c * r * 0.6, y0 = py + sn * r * 0.6;
-      limb(ctx, [[x0, y0], [x0 + c * 7 + sn * 1.5, y0 + sn * 7 - c * 1.5], [x0 + c * 11 + sn * 4.5, y0 + sn * 11 - c * 4.5]], 4.6, 1.2,
-        vgrad(ctx, y0 - 6, y0 + 8, '#fff3dc', 0.3, 0.2), 1.8);
-    }
-    ell(ctx, px, py, r, r * 0.92); paint(ctx, ball(ctx, px, py, r, paw, 0.3, 0.2), 2.5);
-    ell(ctx, px - r * 0.15, py + r * 0.1, r * 0.35, r * 0.3); fillA(ctx, '#ff7fa3', 0.6);
-  };
-  limb(ctx, [[-8, -22], [-16, -19]], 8, 8, shade(fur, -0.1), 2.5);
-  bigPaw(-20, -19 + s * 0.5, 6.5, Math.PI + 0.45);
-  limb(ctx, [[-8, -34], [-18, -33]], 8.5, 8.5, fur, 2.5);
-  bigPaw(-24, -33 - s, 7.5, Math.PI + 0.15);
-  ctx.restore();
-}
-
-// =====================================================================
-//  9. Bonhomme de neige maléfique
-// =====================================================================
-function drawYeti(ctx, f) {
-  const snow = '#f2f6ff', coal = '#2f2a3c', scarf = '#e8344e';
-  const s = f ? 1 : -1, b = f ? -1.5 : 0;
-  // tas de neige
-  smooth(ctx, [[-34, -1], [-26, -8], [-10, -10], [14, -10], [30, -7], [36, -1]]);
-  paint(ctx, vgrad(ctx, -10, 0, '#e6eefc', 0.4, 0.15), LW);
-  // bras arrière
-  ctx.save(); ctx.translate(0, b);
-  limb(ctx, [[24, -52], [34, -62], [44 + s, -74 + s * 2]], 4.4, 2.6, '#9a6234', 2.4);
-  limb(ctx, [[36, -64], [43, -64 + s]], 2.6, 2, '#9a6234', 2);
-  limb(ctx, [[42, -71], [48, -76 + s]], 2.2, 1.6, '#9a6234', 1.8);
-  ctx.restore();
-  // corps
-  const bodyB = () => ell(ctx, 1, -32, 30, 28);
-  form(ctx, bodyB, snow, 1, -32, 32, { light: 0.5, sh: 0.18, fill: null });
-  clipTo(ctx, bodyB, () => { ell(ctx, 18, -18, 18, 22); fillA(ctx, '#b9cbf2', 0.35); });
-  for (const y of [-44, -30, -16]) { ell(ctx, -16 + (y + 30) * 0.12, y, 3.2, 3); paint(ctx, ball(ctx, -16, y, 3, coal, 0.3, 0.2), 1.8); }
-  ctx.save(); ctx.translate(0, b);
-  // tête
-  const head = () => ell(ctx, -3, -79, 23, 22);
-  form(ctx, head, snow, -3, -79, 24, { light: 0.5, sh: 0.18 });
-  clipTo(ctx, head, () => { ell(ctx, 12, -70, 14, 16); fillA(ctx, '#b9cbf2', 0.35); });
-  // écharpe
-  limb(ctx, [[12, -62], [16, -52], [22 + s * 2, -40], [20 + s * 3, -33]], 9, 8, vgrad(ctx, -62, -30, scarf, 0.2, 0.2), 2.5);
-  const sc = () => smooth(ctx, [[-22, -63], [-8, -57], [8, -57], [18, -63], [17, -55], [4, -51], [-10, -51], [-22, -56]]);
-  sc(); paint(ctx, vgrad(ctx, -63, -51, scarf, 0.25, 0.2), 2.5);
-  clipTo(ctx, sc, () => { ctx.fillStyle = '#ffffff'; for (const x of [-14, -2, 10]) { ctx.save(); ctx.translate(x, -57); ctx.rotate(0.2); ctx.fillRect(-1.6, -8, 3.2, 16); ctx.restore(); } });
-  sc(); paint(ctx, null, 2.5);
-  // dents de charbon (sourire mauvais)
-  for (let i = 0; i < 7; i++) {
-    const t = i / 6, x = -20 + t * 26, y = -69.5 + Math.sin(t * Math.PI) * 4 - t * 2;
-    rr(ctx, x - 1.9, y - 1.9, 3.8, 3.8, 1.2); paint(ctx, ball(ctx, x, y, 3, coal, 0.35, 0.2), 1.4);
-  }
-  // yeux de charbon
-  eye(ctx, -16, -86, 5.8, 7, { lid: snow, inner: 1, anger: 0.55, iris: '#2b2240', pr: 0.8 });
-  eye(ctx, 1, -87, 7, 8.4, { lid: snow, inner: -1, anger: 0.55, iris: '#2b2240', pr: 0.8 });
-  brow(ctx, -24, -96, -12, -91, 4.2, '#4a3a5a');
-  brow(ctx, 10, -99, -4, -93, 4.8, '#4a3a5a');
-  blush(ctx, 9, -74, 4.5, 2.6, '#ff8fb0', 0.35); blush(ctx, -22, -75, 3, 2, '#ff8fb0', 0.3);
-  // carotte
-  limb(ctx, [[-12, -78], [-24, -76], [-38, -73]], 8, 1.5, ball(ctx, -18, -79, 14, '#ff8a24', 0.3, 0.25), 2.4);
-  ctx.strokeStyle = rgba('#b4520e', 0.8); ctx.lineWidth = 1.2;
-  for (const x of [-20, -26]) { ctx.beginPath(); ctx.moveTo(x, -79); ctx.lineTo(x - 1, -75.5); ctx.stroke(); }
-  // bras avant (brindille)
-  limb(ctx, [[-24, -48], [-34, -55], [-46, -60 - s * 2]], 4.4, 2.6, '#b0743f', 2.4);
-  limb(ctx, [[-34, -55], [-38, -64 - s]], 2.6, 1.8, '#b0743f', 2);
-  limb(ctx, [[-44, -59 - s * 2], [-50, -56 - s * 2]], 2.2, 1.6, '#b0743f', 1.8);
-  ctx.restore();
-  // flocons
-  sparkle(ctx, -30, -96, 3, '#bfe3ff', 0.9); sparkle(ctx, 24, -96, 2.4, '#bfe3ff', 0.8);
-}
-
-// =====================================================================
-//  10. Toutou-Tron (chien cybernétique)
-// =====================================================================
-function drawRobodog(ctx, f) {
-  const metal = '#9eb0d2', dark = '#4a5478', cyan = '#33eeff', pinkN = '#ff4fd8';
-  const s = f ? 1 : -1, b = f ? -1.2 : 0;
-  // queue antenne
-  limb(ctx, [[36, -44 + b], [42, -54 + b], [46, -62 + b + s]], 3, 2.4, dark, 2);
-  glow(ctx, 46, -63 + b + s, 9, cyan, 0.9);
-  ell(ctx, 46, -63 + b + s, 3, 3); paint(ctx, '#bffaff', 1.8);
-  // pattes
-  const pleg = (x, top, c, lean) => {
-    rr(ctx, x - 5, top, 10, 12, 4); paint(ctx, vgrad(ctx, top, top + 12, c, 0.3, 0.2), 2.5);
-    rr(ctx, x - 3 + lean * 0.4, top + 10, 6, -top - 14, 2); paint(ctx, '#5c6688', 2.2);
-    rr(ctx, x - 7 + lean, -7, 13, 7, 3); paint(ctx, vgrad(ctx, -7, 0, c, 0.3, 0.25), 2.5);
-    ctx.fillStyle = cyan; ctx.fillRect(x - 5 + lean, -4, 9, 1.4);
-  };
-  pleg(31 + 3 * s, -28, shade(metal, -0.2), 0);
-  pleg(-5 - 3 * s, -28, shade(metal, -0.2), 0);
-  ctx.save(); ctx.translate(0, b);
-  const body = () => rr(ctx, -18, -56, 56, 34, 13);
-  form(ctx, body, metal, 10, -42, 32);
-  clipTo(ctx, body, () => {
-    ctx.strokeStyle = rgba('#4a5478', 0.6); ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(8, -56); ctx.lineTo(8, -22); ctx.moveTo(-18, -38); ctx.lineTo(38, -38); ctx.stroke();
-    // bande néon
-    glow(ctx, 10, -30, 30, pinkN, 0.25);
-    ctx.fillStyle = pinkN; rr(ctx, -16, -31, 54, 3, 1.5); ctx.fill();
-    ctx.fillStyle = '#ffd0f4'; rr(ctx, -16, -30.5, 54, 1, 0.5); ctx.fill();
-  });
-  for (const [x, y] of [[-12, -51], [2, -51], [14, -51], [30, -51], [30, -26], [-12, -26]]) { ell(ctx, x, y, 1.6, 1.6); paint(ctx, '#e4ebfa', 1); }
-  // panneau batterie
-  rr(ctx, 16, -50, 14, 9, 2); paint(ctx, '#2a2d4a', 2);
-  for (let i = 0; i < 3; i++) { ctx.fillStyle = i < (f ? 3 : 2) ? '#5dff8a' : '#2f5a40'; ctx.fillRect(18.5 + i * 3.8, -47.5, 2.8, 4); }
-  ctx.restore();
-  pleg(24 - 3 * s, -26, metal, 0);
-  pleg(-14 + 3 * s, -26, metal, -1);
-  ctx.save(); ctx.translate(0, b * 1.3);
-  // cou
-  rr(ctx, -12, -58, 12, 14, 4); paint(ctx, '#3d4466', 2.2);
-  // oreilles
-  poly(ctx, [[-4, -72], [4, -90], [8, -70]]); paint(ctx, vgrad(ctx, -90, -70, shade(metal, -0.15), 0.3, 0.2), 2.5);
-  glow(ctx, 4, -89, 8, f ? '#ff3355' : cyan, 0.9);
-  ell(ctx, 4, -88, 2, 2); ctx.fillStyle = f ? '#ffb3c0' : '#c9fbff'; ctx.fill();
-  // tête
-  const head = () => smooth(ctx, [[-50, -56], [-48, -68], [-36, -76], [-14, -78], [2, -72], [6, -58], [0, -46], [-16, -42], [-40, -42], [-50, -48]]);
-  form(ctx, head, metal, -22, -62, 30);
-  clipTo(ctx, head, () => {
-    ctx.strokeStyle = rgba('#4a5478', 0.55); ctx.lineWidth = 1.4;
-    ctx.beginPath(); ctx.moveTo(-14, -78); ctx.quadraticCurveTo(-8, -60, -18, -42); ctx.stroke();
-  });
-  poly(ctx, [[-36, -74], [-44, -91], [-26, -77]]); paint(ctx, vgrad(ctx, -90, -74, metal, 0.3, 0.2), 2.5);
-  poly(ctx, [[-36, -77], [-41, -86], [-31, -78]]); ctx.fillStyle = pinkN; ctx.fill();
-  // mâchoire
-  const jaw = () => smooth(ctx, [[-52, -50], [-40, -50], [-22, -50], [-20, -44], [-30, -37], [-48, -39]]);
-  jaw(); paint(ctx, '#2a2d4a', 2.5);
-  clipTo(ctx, jaw, () => { ctx.fillStyle = '#e6ecff'; for (let i = 0; i < 5; i++) { poly(ctx, [[-50 + i * 6, -50.5], [-45 + i * 6, -50.5], [-47.5 + i * 6, -45.5]]); ctx.fill(); } glow(ctx, -36, -40, 10, '#ff3355', 0.6); });
-  jaw(); paint(ctx, null, 2.5);
-  ell(ctx, -50, -60, 4.6, 3.6); paint(ctx, ball(ctx, -50, -61, 5, '#2a2d4a', 0.3, 0.2), 2);
-  gloss(ctx, -51.5, -61.5, 1.5, 0.9, 0.7);
-  // visière lumineuse
-  glow(ctx, -26, -64, 28, cyan, 0.45);
-  const vis = () => smooth(ctx, [[-48, -66], [-38, -72], [-14, -73], [0, -68], [-2, -60], [-16, -58], [-38, -58], [-48, -61]]);
-  vis(); paint(ctx, '#162039', 2.5);
-  clipTo(ctx, vis, () => {
-    const g = ctx.createLinearGradient(0, -73, 0, -58);
-    g.addColorStop(0, rgba(cyan, 0.15)); g.addColorStop(1, rgba(cyan, 0.45));
-    ctx.fillStyle = g; ctx.fillRect(-50, -75, 52, 18);
-    for (const [x, inner, w] of [[-36, 1, 7], [-17, -1, 9]]) {
-      const pts = inner > 0 ? [[x - w, -68], [x + w, -64], [x + w * 0.8, -60.5], [x - w * 0.9, -61.5]] : [[x + w, -69], [x - w, -64.5], [x - w * 0.8, -60.5], [x + w * 0.9, -61.5]];
-      glow(ctx, x, -63, 12, cyan, 0.9);
-      poly(ctx, pts); ctx.fillStyle = cyan; ctx.fill();
-      poly(ctx, pts.map(([px, py]) => [x + (px - x) * 0.55, -63 + (py + 63) * 0.45])); ctx.fillStyle = '#eaffff'; ctx.fill();
-    }
-    ctx.fillStyle = rgba('#ffffff', 0.12); for (let y = -72; y < -58; y += 2.5) ctx.fillRect(-50, y, 52, 0.8);
-  });
-  vis(); paint(ctx, null, 2.5);
-  gloss(ctx, -36, -70, 7, 1.5, 0.5, -0.1);
-  ctx.restore();
-}
-
-// =====================================================================
-//  11. Gloop de lave
-// =====================================================================
-function drawSlime(ctx, f) {
-  const sy = f ? 0.94 : 1, sx = f ? 1.05 : 1;
-  ctx.save(); ctx.translate(0, -28); ctx.scale(1.2, 0.62); glow(ctx, 0, 0, 46, '#ff6a1a', 0.32); ctx.restore();
-  ctx.save(); ctx.translate(0, -30); glow(ctx, 0, 0, 40, '#ff6a1a', 0.18); ctx.restore();
-  // flaque de lave
-  smooth(ctx, [[-44, -2], [-36, -6], [-10, -7], [20, -7], [42, -5], [47, -1], [30, 2.5], [0, 3], [-30, 2.5]]);
-  paint(ctx, vgrad(ctx, -7, 3, '#ff7a1f', 0.35, 0.3), 2.5);
-  ell(ctx, -6, -3, 26, 1.8); fillA(ctx, '#ffe066', 0.75);
-  ctx.save(); ctx.scale(sx, sy);
-  const body = () => smooth(ctx, [
-    [-36, -3], [-39, -15], [-34, -31], [-22, -45], [-11, -55], [-8, -63], [-12, -70], [-3, -69], [5, -61],
-    [18, -52], [30, -40], [37, -24], [39, -9], [36, -3], [22, -1], [8, -3], [-6, -1], [-22, -2],
-  ]);
-  body();
-  const g = ctx.createRadialGradient(-2, -22, 2, 0, -26, 48);
-  g.addColorStop(0, '#fff7c0'); g.addColorStop(0.22, '#ffd447'); g.addColorStop(0.5, '#ff8a22'); g.addColorStop(0.8, '#ee4520'); g.addColorStop(1, '#b3221e');
-  ctx.fillStyle = g; ctx.fill();
-  clipTo(ctx, body, () => {
-    glow(ctx, -1, -22, 26, '#fff7c0', 0.75);
-    // bord plus sombre (lave qui refroidit)
-    body(); ctx.lineWidth = 9; ctx.strokeStyle = rgba('#8a1a1c', 0.35); ctx.stroke();
-    // fissures sombres (veines de croûte) avec liseré lumineux
-    const cracks = [
-      [3.2, [[-37, -10], [-30, -14], [-31, -22], [-24, -27]]], [2, [[-30, -14], [-23, -12]]],
-      [3.2, [[37, -12], [30, -17], [33, -25], [27, -32]]], [2, [[30, -17], [22, -16]]],
-      [2.8, [[-27, -38], [-20, -40], [-18, -47]]], [2.4, [[22, -45], [15, -44], [12, -50]]],
-      [2.2, [[-6, -60], [0, -56], [-1, -51]]],
-    ];
-    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    for (const [w, pts] of cracks) { ctx.lineWidth = w + 2.4; ctx.strokeStyle = rgba('#ffe27a', 0.55); poly(ctx, pts, false); ctx.stroke(); }
-    for (const [w, pts] of cracks) { ctx.lineWidth = w; ctx.strokeStyle = '#4a1424'; poly(ctx, pts, false); ctx.stroke(); }
-    // bulles de lave en fusion
-    for (const [x, y, r] of [[-26, -18, 2.6], [24, -24, 2], [18, -36, 1.4], [-22, -31, 1.3], [8, -8, 1.8]]) {
-      ell(ctx, x, y, r, r); ctx.lineWidth = 1.1; ctx.strokeStyle = rgba('#fff3b0', 0.9); ctx.stroke();
-      gloss(ctx, x - r * 0.35, y - r * 0.4, r * 0.35, r * 0.25, 0.9, 0);
-    }
-    // ombre propre en bas à droite
-    ell(ctx, 32, -8, 22, 22); fillA(ctx, '#8a1418', 0.28);
-    ell(ctx, -6, -1, 34, 5); fillA(ctx, '#8a1418', 0.25);
-  });
-  body(); paint(ctx, null, LW);
-  // reflets brillants (liquide)
-  gloss(ctx, -24, -38, 5, 2.4, 0.55, -0.8);
-  gloss(ctx, -30, -28, 1.6, 1.3, 0.6);
-  gloss(ctx, -6, -66, 2, 1.3, 0.5, -0.3);
-  // yeux
-  eye(ctx, -14, -32, 7.6, 8.8, { lid: '#e8521f', inner: 1, anger: 0.58, iris: '#ff5a1f' });
-  eye(ctx, 6, -33, 8.6, 9.8, { lid: '#e8521f', inner: -1, anger: 0.58, iris: '#ff5a1f' });
-  // bouche
-  const m = () => smooth(ctx, [[-14, -19], [-4, -16], [8, -17], [14, -20], [8, -11], [-6, -10]]);
-  m(); paint(ctx, '#5a1520', 2.5);
-  clipTo(ctx, m, () => {
-    glow(ctx, 0, -10, 10, '#ffd040', 0.9);
-    ctx.fillStyle = '#fffbea'; poly(ctx, [[-10, -19], [-6, -19], [-8, -14]]); ctx.fill(); poly(ctx, [[6, -18], [10, -18.5], [8, -13.5]]); ctx.fill();
-  });
-  m(); paint(ctx, null, 2.5);
-  ctx.restore();
-  // bulles / braises
-  const by = f ? -4 : 0;
-  for (const [x, y, r] of [[-20, -66 + by, 3], [14, -74 + by * 2, 2.2], [24, -62 + by, 1.6]]) {
-    glow(ctx, x, y, r * 3.2, '#ffb040', 0.6);
-    ell(ctx, x, y, r, r); paint(ctx, '#ffd060', 1.4, '#c43a1a');
-  }
-}
-
-// =====================================================================
-//  12. Souris martienne (soucoupe)
-// =====================================================================
-function drawUfo(ctx, f) {
-  const green = '#7fe05c', pink = '#ff9dc4', metal = '#bfc6e4';
-  const b = f ? -2.5 : 0;
-  // rayon tracteur
   ctx.save();
-  const beam = ctx.createLinearGradient(0, -26, 0, 0);
-  beam.addColorStop(0, rgba('#b6ff7a', 0.5)); beam.addColorStop(1, rgba('#b6ff7a', 0));
-  ctx.fillStyle = beam;
-  poly(ctx, [[-14, -26 + b], [14, -26 + b], [24, 0], [-24, 0]]); ctx.fill();
-  ctx.restore();
-  ctx.save(); ctx.translate(0, b);
-  // dessous
-  ell(ctx, 0, -30, 26, 8); paint(ctx, ball(ctx, 0, -30, 26, '#5b5f88', 0.3, 0.2), 2.5);
-  glow(ctx, 0, -26, 16, '#b6ff7a', 0.8);
-  ell(ctx, 0, -25.5, 8, 2.6); ctx.fillStyle = '#eaffd0'; ctx.fill();
-  // soucoupe
-  const disc = () => ell(ctx, 0, -38, 48, 12.5);
-  disc();
-  const g = ctx.createLinearGradient(0, -50, 0, -26);
-  g.addColorStop(0, shade(metal, 0.5)); g.addColorStop(0.5, metal); g.addColorStop(0.52, shade(metal, -0.2)); g.addColorStop(1, shade(metal, -0.38));
-  paint(ctx, g, LW);
-  gloss(ctx, -22, -44, 12, 2.4, 0.5, -0.08);
-  // souris dans le dôme
-  const DY = -44, DRX = 27, DRY = 37;
-  const dome = () => { ctx.beginPath(); ctx.ellipse(0, DY, DRX, DRY, 0, Math.PI, 0, false); ctx.closePath(); };
-  dome();
-  const inner = ctx.createLinearGradient(0, DY - DRY, 0, DY);
-  inner.addColorStop(0, rgba('#d9f6ff', 0.55)); inner.addColorStop(1, rgba('#7fc8ff', 0.5));
-  ctx.fillStyle = inner; ctx.fill();
-  clipTo(ctx, dome, () => {
-    // corps
-    ell(ctx, 3, -44, 15, 10); paint(ctx, ball(ctx, 3, -48, 15, green, 0.3, 0.25), 2.5);
-    ear(ctx, -15, -70, 9, green, pink, -0.35);
-    ear(ctx, 14, -71, 9.5, green, pink, 0.35);
-    const head = () => smooth(ctx, [[-23, -54], [-17, -65], [-3, -70], [11, -66], [16, -55], [10, -46], [-6, -44], [-18, -47]]);
-    form(ctx, head, green, -3, -57, 18, { lw: 2.6 });
-    eye(ctx, -11, -57, 5.4, 6.6, { lid: green, inner: 1, anger: 0.55, iris: '#c82dd6' });
-    eye(ctx, 3, -58, 6.4, 7.6, { lid: green, inner: -1, anger: 0.55, iris: '#c82dd6' });
-    ell(ctx, -23.5, -52, 3, 2.6); paint(ctx, ball(ctx, -23.5, -53, 3, '#ff6f96'), 1.8);
-    ctx.beginPath(); ctx.moveTo(-19, -48.5); ctx.quadraticCurveTo(-15, -47, -11, -49.5); ctx.lineWidth = 1.8; ctx.strokeStyle = OUT; ctx.stroke();
-    blush(ctx, 6, -49, 3.4, 2, '#ff5d8f', 0.45);
-    // antennes
-    limb(ctx, [[-6, -69], [-9, -75], [-11, -77]], 2, 1.6, shade(green, -0.2), 1.4);
-    ell(ctx, -11.5, -78, 2.4, 2.4); paint(ctx, '#ffe95a', 1.4);
-    limb(ctx, [[2, -69], [3, -76]], 2, 1.6, shade(green, -0.2), 1.4);
-    ell(ctx, 3, -77.5, 2.4, 2.4); paint(ctx, '#ffe95a', 1.4);
-    // pattes sur le tableau de bord
-    ell(ctx, -12, -45, 3.8, 3); paint(ctx, pink, 2);
-    ell(ctx, 15, -45, 3.8, 3); paint(ctx, pink, 2);
+  ctx.translate(0, -[0, 2, 0, 1][a.f]);
+  squash(ctx, a, 0.8);
+  // antenne arrière
+  limb(ctx, [[26, -38], [30, -48], [33 + a.s * 1.5, -55]], 3, 2.4, P.plate, { rim: false });
+  glow(ctx, 33 + a.s * 1.5, -57, 10, P.bulb, a.f % 2 ? 0.9 : 0.5);
+  blob(ctx, 33 + a.s * 1.5, -57, 4, P.bulb, { lw: 2.2, rim: false });
+  // coque
+  const shell = B([[-40, -14], [-39, -32], [-31, -42], [0, -45], [31, -42], [39, -32], [40, -14], [34, -7], [0, -6], [-34, -7]], 0.45);
+  fig(ctx, shell, P.shell, {
+    crack: 6, cn: 2,
+    inside: () => {
+      // pare-chocs
+      ctx.fillStyle = P.bump; ctx.fillRect(-45, -15, 90, 12);
+      ctx.beginPath(); ctx.moveTo(-45, -15); ctx.lineTo(45, -15); stroke(ctx, 2.4);
+      if (V === 1) { ctx.fillStyle = P.gold; ctx.fillRect(-45, -15, 90, 4.5); ctx.beginPath(); ctx.moveTo(-45, -10.5); ctx.lineTo(45, -10.5); stroke(ctx, 1.8); }
+      // plaque de capot
+      ell(ctx, 2, -45, 30, 8); ctx.fillStyle = P.top; ctx.fill(); ell(ctx, 2, -45, 30, 8); stroke(ctx, 2.6);
+      ell(ctx, -8, -47, 12, 2.5); fillA(ctx, '#ffffff', 0.35);
+    },
   });
-  // verre
-  dome();
-  const dg = ctx.createLinearGradient(-DRX, DY - DRY, DRX, DY);
-  dg.addColorStop(0, rgba('#ffffff', 0.3)); dg.addColorStop(0.45, rgba('#bff0ff', 0.04)); dg.addColorStop(1, rgba('#6fb8ff', 0.25));
-  paint(ctx, dg, LW);
-  ctx.save(); ctx.beginPath(); ctx.ellipse(0, DY, DRX - 6, DRY - 6, 0, Math.PI * 1.1, Math.PI * 1.42); ctx.lineWidth = 3.2; ctx.strokeStyle = rgba('#ffffff', 0.8); ctx.stroke(); ctx.restore();
-  gloss(ctx, -4, DY - DRY + 4, 2.2, 1.4, 0.85);
-  // bague métallique
-  ctx.beginPath(); ctx.ellipse(0, -44, 27, 5, 0, 0, Math.PI, false); ctx.lineWidth = 5; ctx.strokeStyle = OUT; ctx.stroke();
-  ctx.lineWidth = 2.5; ctx.strokeStyle = '#8e95bc'; ctx.stroke();
-  // antenne du dôme
-  limb(ctx, [[0, -81], [0, -88]], 2.4, 2.2, '#8e95bc', 1.8);
-  glow(ctx, 0, -91, 9, '#ff4fd8', f ? 1 : 0.7);
-  ell(ctx, 0, -91, 3.2, 3.2); paint(ctx, '#ff8be6', 1.8);
-  // lumières
-  const cols = ['#ffe95a', '#5ff3ff', '#ff6fd8'];
-  for (let i = 0; i < 7; i++) {
-    const a = Math.PI * (0.12 + i * 0.127);
-    const x = Math.cos(a) * 40, y = -35 + Math.sin(a) * 6.5;
-    const on = (i + f) % 2 === 0;
-    const c = cols[i % 3];
-    if (on) glow(ctx, x, y, 10, c, 0.95);
-    ell(ctx, x, y, 3, 2.4); paint(ctx, on ? shade(c, 0.4) : shade(c, -0.35), 1.6);
-  }
-  ctx.restore();
-}
-
-// =====================================================================
-//  13. Fantôme drap
-// =====================================================================
-function drawGhost(ctx, f) {
-  const sheet = '#f4f1ff';
-  const b = f ? -3 : 0, w = f ? 1 : -1;
-  ctx.save(); ctx.translate(0, b - 12);
-  const body = () => smooth(ctx, [
-    [-6, -84], [10, -79], [20, -64], [22, -46], [30, -30], [42, -22], [50, -26 + w * 2], [46, -14], [34, -6],
-    [24, -4 + w], [16, -8], [8, -2 - w], [-2, -8], [-12, -2 + w], [-20, -8], [-28, -4 - w], [-30, -18], [-28, -38],
-    [-36, -46], [-31, -52], [-26, -48], [-24, -62], [-18, -77],
-  ]);
-  body();
-  const g = ctx.createLinearGradient(-20, -84, 30, -4);
-  g.addColorStop(0, rgba('#ffffff', 0.97)); g.addColorStop(0.5, rgba(sheet, 0.9)); g.addColorStop(1, rgba('#b7acec', 0.78));
-  ctx.fillStyle = g; ctx.fill();
-  clipTo(ctx, body, () => {
-    ctx.strokeStyle = rgba('#9a8fd6', 0.4); ctx.lineWidth = 2.2;
-    for (const [x0, y0, x1, y1] of [[4, -50, 10, -8], [16, -44, 26, -10], [-14, -36, -16, -6]]) { ctx.beginPath(); ctx.moveTo(x0, y0); ctx.quadraticCurveTo((x0 + x1) / 2 + 4, (y0 + y1) / 2, x1, y1); ctx.stroke(); }
-    ell(ctx, 18, -30, 18, 30, 0.3); fillA(ctx, '#a99be6', 0.18);
+  // écran visage
+  const scr = RR(-35, -38, 30, 22, 7);
+  fig(ctx, scr, '#191230', {
+    rim: false, lw: 2.8, glint: false, hi: 0.1,
+    inside: () => {
+      const L = P.led;
+      glow(ctx, -20, -27, 22, L, 0.35);
+      ctx.fillStyle = L;
+      if (a.f === 3) {
+        ctx.fillRect(-31, -31, 9, 2.6); ctx.fillRect(-18, -31, 9, 2.6);
+      } else {
+        poly(ctx, [[-32, -35.5], [-21.5, -31], [-21.5, -27.5], [-32, -29]]); ctx.fill();
+        poly(ctx, [[-8.5, -35.5], [-18.5, -31], [-18.5, -27.5], [-8.5, -29]]); ctx.fill();
+        ctx.fillStyle = mix(L, '#ffffff', 0.7);
+        poly(ctx, [[-30, -32.5], [-23.5, -30.2], [-23.5, -29.2], [-30, -30.6]]); ctx.fill();
+        poly(ctx, [[-10.5, -32.5], [-16.5, -30.2], [-16.5, -29.2], [-10.5, -30.6]]); ctx.fill();
+      }
+      ctx.beginPath();
+      const z = a.f % 2 ? 1 : 0;
+      for (let i = 0; i <= 8; i++) ctx.lineTo(-30 + i * 2.6, -21 - ((i + z) % 2) * 3.2);
+      stroke(ctx, 2, L);
+      ctx.fillStyle = 'rgba(255,255,255,0.07)'; for (let y = -37; y < -16; y += 2.2) ctx.fillRect(-36, y, 32, 0.9);
+    },
   });
-  body(); paint(ctx, null, LW);
-  gloss(ctx, -12, -72, 4, 7, 0.6, 0.5);
-  // yeux (trous sombres)
-  for (const [x, y, rx, ry, inner] of [[-17, -58, 5.6, 7.6, 1], [-2, -59, 7, 9, -1]]) {
-    const path = () => ell(ctx, x, y, rx, ry);
-    path(); ctx.fillStyle = ball(ctx, x, y, ry, '#3a2458', 0.25, 0.2); ctx.fill();
-    clipTo(ctx, path, () => {
-      glow(ctx, x - 1, y + 3, ry, '#b66bff', 0.6);
-      const xo = x - inner * rx * 1.3, xi = x + inner * rx * 1.3;
-      poly(ctx, [[xo, y - ry * 1.05], [xi, y - ry * 0.15], [xi, y - ry * 3], [xo, y - ry * 3]]); ctx.fillStyle = sheet; ctx.fill();
-      ctx.beginPath(); ctx.moveTo(xo, y - ry * 1.05); ctx.lineTo(xi, y - ry * 0.15); ctx.lineWidth = 3; ctx.strokeStyle = OUT; ctx.stroke();
-      ell(ctx, x - rx * 0.35, y + ry * 0.05, rx * 0.28, ry * 0.2, -0.4); ctx.fillStyle = '#ffffff'; ctx.fill();
-      ell(ctx, x + rx * 0.25, y + ry * 0.45, rx * 0.12, ry * 0.09); ctx.fill();
-    });
-    path(); paint(ctx, null, 2.5);
-  }
-  // bouche (grimace ondulée avec un croc)
-  const m = () => smooth(ctx, [[-19, -44], [-13, -47], [-7, -45], [-1, -47.5], [4, -44.5], [0, -39.5], [-8, -38.5], [-16, -40]]);
-  m(); paint(ctx, '#3a2458', 2.5);
-  clipTo(ctx, m, () => {
-    ell(ctx, -7, -37.5, 6, 3.2); ctx.fillStyle = '#c77bff'; ctx.fill();
-    poly(ctx, [[-14, -47], [-10.5, -46.5], [-12.5, -42]]); ctx.fillStyle = '#ffffff'; ctx.fill();
-  });
-  m(); paint(ctx, null, 2.5);
-  blush(ctx, 7, -49, 4, 2.4, '#ff8fc8', 0.45); blush(ctx, -25, -49, 3, 2, '#ff8fc8', 0.35);
-  // menotte + chaîne qui pend du bras tendu
-  ell(ctx, -32, -48, 4.4, 3.6, 0.5);
-  paint(ctx, vgrad(ctx, -52, -44, '#9aa1c6', 0.45, 0.3), 2.2);
-  const links = [[-33.5, -41.5], [-34.5, -35.5], [-35, -29.5 + w * 0.5], [-34.5, -23.5 + w]];
-  links.forEach(([x, y], i) => {
-    if (i % 2 === 0) {
-      ell(ctx, x, y, 2.6, 3.8);
-      ctx.lineWidth = 4.4; ctx.strokeStyle = OUT; ctx.stroke();
-      ctx.lineWidth = 1.9; ctx.strokeStyle = '#c3c9e6'; ctx.stroke();
-    } else {
-      rr(ctx, x - 1.3, y - 4, 2.6, 8, 1.3); paint(ctx, '#8e95bc', 1.8);
+  // autocollant du gang
+  gangBadge(ctx, 20, -27, 6, '#fff3d6', '#3a2c4c');
+  if (V === 1) for (const x of [-34, -24, 24, 34]) spike(ctx, x, -9, Math.PI / 2 + (x < 0 ? 0.5 : -0.5), 7, 4.6, P.gold);
+  // crête-brosse (flammes en Infernal)
+  fig(ctx, RR(-14, -54, 26, 8, 3), P.bump, { rim: false, lw: 2.6, glint: false });
+  if (V === 3) {
+    flame(ctx, -9, -53, 7, a.ph, -0.2); flame(ctx, 0, -54, 9, a.ph + 2, -0.1); flame(ctx, 9, -53, 7, a.ph + 4);
+  } else {
+    const n = 7;
+    for (let i = 0; i < n; i++) {
+      const t = i / (n - 1);
+      const x = -12 + t * 22, h = 13 + Math.sin(t * Math.PI) * 8;
+      const sway = Math.sin(a.ph + t * 2.5) * 2.2;
+      limb(ctx, [[x, -52], [x - 2 + sway * 0.5, -52 - h * 0.6], [x - 4 + sway, -52 - h]], 5, 2.6, i % 2 ? P.brush2 : P.brush, { lw: 2.2, rim: false });
     }
-  });
-  ell(ctx, -34, -14 + w * 1.5, 5.8, 5.8); paint(ctx, ball(ctx, -34, -14 + w * 1.5, 5.8, '#5b5f88', 0.45, 0.25), 2.5);
-  gloss(ctx, -36, -16 + w * 1.5, 1.7, 1.2, 0.75);
+  }
+  if (V === 2) { drip(ctx, -20, -5, 6, a.ph); drip(ctx, 14, -5, 8, a.ph + 2); }
   ctx.restore();
+  // balai rotatif avant
+  ctx.save(); ctx.translate(-40, -6); ctx.rotate(a.f * Math.PI / 6);
+  for (let i = 0; i < 3; i++) { ctx.rotate(TAU / 3); limb(ctx, [[0, 0], [0, -6], [1.5, -11]], 3.4, 2, P.brush2, { lw: 2, rim: false }); }
+  blob(ctx, 0, 0, 3.4, P.plate, { lw: 2, rim: false });
+  ctx.restore();
+  motes(ctx, a, 3, -36, -60, 72, 50);
 }
 
 // =====================================================================
-//  14. Rat chevalier
+//  4. Concombre maléfique — ninja : bandeau à plaque, katana dans le dos, shuriken
 // =====================================================================
-function drawKnightRat(ctx, f) {
-  const fur = '#a3a7c6', pink = '#ff9dbb', steel = '#cdd5ea', gold = '#ffc43d', plume = '#e8344e';
-  const s = f ? 1 : -1, b = f ? -1.5 : 0;
+const CUC = {
+  rim: '#c6ff4a',
+  skin: ['#3dbb4c', 'b'], dark: ['#1f7a33', 'b'], belly: ['#b8f07a', 'b'],
+  band: ['#ff2f4a', 'a'], belt: ['#2a2440', 'c'], plate: ['#d9def0', 'm'], hilt: ['#3a2c4c', 'c'], guard: ['#ffc83a', 'm'],
+  iris: ['#c0261f', 'e'],
+};
+function drawCucumber(ctx, a, P) {
+  const st = a.step;
+  // pieds
+  for (const [x, dx, c] of [[8, -st * 3.5, shade(P.dark, -0.15)], [-7, st * 3.5, P.dark]]) {
+    const lift = (x > 0 && a.lift === -1) || (x < 0 && a.lift === 1) ? -3.5 : 0;
+    limb(ctx, [[x, -12], [x + dx, -5 + lift]], 6, 5.5, c);
+    fig(ctx, B([[x + dx - 8, lift], [x + dx - 7, lift - 5], [x + dx, lift - 7], [x + dx + 5, lift - 4], [x + dx + 4, lift + 0.3]]), P.belt, { rim: false, glint: false });
+  }
+  ctx.save();
+  ctx.translate(0, -a.up * 1.5);
+  squash(ctx, a, 1.2);
+  // katana dans le dos
+  ctx.save(); ctx.translate(15, -68); ctx.rotate(0.55);
+  fig(ctx, RR(-2.6, -30, 5.2, 24, 2), P.hilt, { rim: false, lw: 2.4, glint: false, inside: () => { ctx.strokeStyle = shade(P.plate, -0.2); ctx.lineWidth = 1.4; for (let y = -28; y < -8; y += 4) { ctx.beginPath(); ctx.moveTo(-3, y); ctx.lineTo(3, y + 3); ctx.moveTo(3, y); ctx.lineTo(-3, y + 3); ctx.stroke(); } } });
+  fig(ctx, RR(-6.5, -7, 13, 4.2, 2), P.guard, { rim: false, lw: 2.2, glint: false });
+  ctx.restore();
+  // bras arrière
+  limb(ctx, [[14, -44], [23, -38], [25, -30 + a.s]], 6, 5, shade(P.skin, -0.12));
+  blob(ctx, 25, -29 + a.s, 4.4, shade(P.skin, -0.1), { rim: false });
+  // corps
+  const body = B([[-6, -101], [8, -97], [17, -80], [20, -55], [19, -28], [13, -10], [0, -6], [-12, -9], [-18, -26], [-20, -55], [-18, -82], [-14, -96]]);
+  fig(ctx, body, P.skin, {
+    crack: 7, cn: 3,
+    inside: () => {
+      ctx.strokeStyle = rgba(P.belly, 0.35); ctx.lineWidth = 3.4;
+      for (const x of [-9, 1, 11]) { ctx.beginPath(); ctx.moveTo(x - 1, -100); ctx.quadraticCurveTo(x + 2, -50, x * 0.8, -6); ctx.stroke(); }
+      const rnd = seeded(7);
+      for (let i = 0; i < 18; i++) {
+        const x = -17 + rnd() * 34, y = -96 + rnd() * 86;
+        if (y > -76 && y < -42 && x < 14) continue;
+        ell(ctx, x, y, 2, 1.7); ctx.fillStyle = P.dark; ctx.fill();
+        ell(ctx, x - 0.5, y - 0.6, 0.9, 0.7); ctx.fillStyle = rgba('#e8ffc0', 0.8); ctx.fill();
+      }
+      // ceinture (obi)
+      fig(ctx, RR(-24, -30, 50, 8, 1), P.belt, { rim: false, lw: 2.4, glint: false });
+      // bandeau
+      fig(ctx, RR(-24, -86, 50, 8, 1), P.band, { rim: false, lw: 2.4, glint: false });
+    },
+  });
+  // nœud + pans du bandeau (flammes en Infernal)
+  if (V === 3) { flame(ctx, 21, -80, 7, a.ph, 0.6); flame(ctx, 26, -76, 5.5, a.ph + 2, 0.7); }
+  else {
+    const w = a.ph;
+    limb(ctx, [[17, -82], [27, -84 + Math.sin(w) * 3], [37, -80 + Math.sin(w + 1.4) * 4], [45, -84 + Math.sin(w + 2.6) * 4]], 5, 3.4, P.band, { lw: 2.4 });
+    limb(ctx, [[17, -81], [25, -76 + Math.sin(w + 0.8) * 2], [33, -70 + Math.sin(w + 2) * 3], [39, -72 + Math.sin(w + 3) * 3]], 4.6, 3, shade(P.band, -0.15), { lw: 2.4 });
+  }
+  blob(ctx, 17, -82, 4, P.band, { lw: 2.4, rim: false });
+  // plaque frontale
+  fig(ctx, RR(-19, -88, 15, 11, 2.5), P.plate, { rim: false, lw: 2.4, hi: 0.3, inside: () => { ctx.beginPath(); ctx.moveTo(-16, -80); ctx.lineTo(-8, -86); stroke(ctx, 1.6, rgba(OUT, 0.7)); } });
+  // visage
+  const blink = a.f === 3;
+  eye(ctx, -11, -67, 6.4, { ry: 7.6, skin: P.skin, inner: 1, anger: 0.62, lid: 0.12, iris: P.iris, blink });
+  eye(ctx, 5, -68, 7.6, { ry: 9, skin: P.skin, inner: -1, anger: 0.62, lid: 0.12, iris: P.iris, blink });
+  brow(ctx, -20, -76.5, -6, -71.5, 5, OUT);
+  brow(ctx, 15, -78, -1, -73, 5.4, OUT);
+  const mouth = B([[-17, -52], [-6, -49.5], [7, -50.5], [14, -54], [11, -45], [0, -40], [-11, -43]]);
+  fig(ctx, mouth, '#6e1730', {
+    rim: false, lw: 2.6, glint: false, hi: 0,
+    inside: () => {
+      ell(ctx, 0, -39, 8, 4.5); ctx.fillStyle = '#ff6d8a'; ctx.fill();
+      ctx.fillStyle = WHITE;
+      for (let i = 0; i < 5; i++) { const x = -15 + i * 6; poly(ctx, [[x, -54], [x + 5, -54], [x + 2.5, -47.5 + (i % 2)]]); ctx.fill(); }
+    },
+  });
+  fang(ctx, -12, -45, 4, 3.4, true);
+  if (V === 2) drip(ctx, 4, -42, 8, a.ph);
+  if (V === 1) { pauldron(ctx, 14, -46, 7.5, 0.4); for (const x of [-8, 1, 10]) spike(ctx, x, -96 + Math.abs(x - 1) * 0.25, -Math.PI / 2 + (x - 1) * 0.04, 8, 5, P.gold); }
+  // bras avant + shuriken
+  const hx = -30, hy = -40 + st * 1.5;
+  ctx.save(); ctx.translate(hx - 4, hy - 4); ctx.rotate(a.f * Math.PI / 8);
+  const sh = [];
+  for (let i = 0; i < 8; i++) { const r = i % 2 ? 3 : 10; const t = i * Math.PI / 4; sh.push([Math.cos(t) * r, Math.sin(t) * r]); }
+  fig(ctx, PL(sh), P.plate, { rim: false, lw: 2.2, hi: 0.3, size: 9, inside: () => { ell(ctx, 0, 0, 2, 2); ctx.fillStyle = OUT; ctx.fill(); } });
+  ctx.restore();
+  limb(ctx, [[-16, -44], [-23, -40], [hx + 1, hy + 0.5]], 6, 5, P.skin);
+  blob(ctx, hx, hy, 4.6, P.skin, { rim: false });
+  ctx.restore();
+  motes(ctx, a, 4, -26, -108, 52, 100);
+}
+
+// =====================================================================
+//  5. Pigeon pirate — tricorne, cache-œil, jambe de bois, sabre d'abordage
+// =====================================================================
+const PIG = {
+  rim: '#3fe0c0',
+  gray: ['#a2abcb', 'b'], wing: ['#7c85aa', 'b'], belly: ['#dfe3f4', 'b'], neck: ['#3fd0a6', 'a'], neck2: ['#a46ce6', 'a'],
+  beak: ['#f2a65a', 'd'], foot: ['#ff7f86', 'd'], peg: ['#9a6238', 'k'], hat: ['#2e2440', 'c'], trim: ['#ffc83a', 'm'],
+  blade: ['#dfe6f7', 'm'], plume: ['#ff3d5a', 'a'], patch: ['#2a1c30', 'k'], iris: ['#ff8a1f', 'e'],
+};
+function drawPigeon(ctx, a, P) {
+  const st = a.step;
+  // jambe de bois (arrière) et patte (avant)
+  const bx = 8 - st * 3.5, by = a.lift === -1 ? -3.5 : 0;
+  limb(ctx, [[7, -16], [bx, by - 1]], 5.5, 4.2, P.peg, { rim: false });
+  blob(ctx, bx, by - 1, 2.6, shade(P.peg, -0.2), { rim: false, lw: 2 });
+  const fx = -6 + st * 3.5, fy = a.lift === 1 ? -3.5 : 0;
+  limb(ctx, [[-5, -16], [fx, fy - 3]], 3.6, 3.4, P.foot, { rim: false });
+  for (const d of [-0.5, 0, 0.6]) limb(ctx, [[fx, fy - 2], [fx - 6 * Math.cos(d), fy - 0.6 + Math.sin(d) * 0.5]], 3, 2.4, P.foot, { rim: false, lw: 2 });
+  ctx.save();
+  ctx.translate(0, -a.up * 1.5);
+  squash(ctx, a);
   // queue
-  limb(ctx, [[12, -18], [28, -12], [42, -18 + s], [48, -32], [42, -42 - s]], 6, 2.2, vgrad(ctx, -44, -10, pink, 0.2, 0.25), 2.5);
-  // jambe arrière
-  rr(ctx, 4 - 3 * s, -18, 9, 14, 3); paint(ctx, shade(steel, -0.25), 2.5);
-  rr(ctx, 1 - 3 * s, -7, 13, 7, 3); paint(ctx, '#5b4a6e', 2.5);
-  ctx.save(); ctx.translate(0, b);
-  // épée (bras arrière, levée)
-  ctx.save(); ctx.translate(16, -46); ctx.rotate(0.45 + s * 0.06);
-  poly(ctx, [[-2.8, -6], [2.8, -6], [2.8, -36], [0, -42], [-2.8, -36]]);
-  const bg = ctx.createLinearGradient(-3, 0, 3, 0); bg.addColorStop(0, '#ffffff'); bg.addColorStop(0.5, '#dfe6f7'); bg.addColorStop(1, '#9aa6c8');
-  paint(ctx, bg, 2.4);
-  ctx.strokeStyle = rgba('#8fa0c8', 0.8); ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(0, -8); ctx.lineTo(0, -35); ctx.stroke();
-  rr(ctx, -8, -8, 16, 4, 2); paint(ctx, gold, 2.2);
-  rr(ctx, -2, -4, 4, 8, 1.5); paint(ctx, '#7a4a28', 2);
-  ell(ctx, 0, 5.5, 2.6, 2.6); paint(ctx, gold, 1.8);
+  for (const [dy, c] of [[-4, shade(P.wing, -0.15)], [2, P.wing], [7, shade(P.wing, -0.1)]]) {
+    fig(ctx, B([[16, -27 + dy * 0.3], [34, -26 + dy], [42, -22 + dy * 1.2], [37, -17 + dy], [16, -19 + dy * 0.3]]), c, { rim: false, glint: false, lw: 2.6 });
+  }
+  // corps dodu
+  const body = B([[-21, -39], [-15, -21], [0, -12], [16, -14], [27, -25], [24, -40], [10, -48], [-8, -50]]);
+  fig(ctx, body, P.gray, { crack: 8, cn: 2, inside: () => { ell(ctx, -10, -24, 11, 11); ctx.fillStyle = P.belly; ctx.fill(); } });
+  // aile (porte le sabre)
+  const sa = -0.85 + a.s * 0.12;
+  ctx.save(); ctx.translate(-17, -32); ctx.rotate(sa);
+  fig(ctx, B([[-3, 4], [3, 4], [3.5, -8], [6, -20], [4, -30], [0, -33], [-1, -22], [-3, -8]], 0.4), P.blade, { rim: false, lw: 2.4, hi: 0.35, size: 10 });
+  fig(ctx, RR(-6.5, 2, 13, 4.2, 2), P.trim, { rim: false, lw: 2.2, glint: false });
+  fig(ctx, RR(-2.2, 6, 4.4, 8, 2), P.peg, { rim: false, lw: 2, glint: false });
   ctx.restore();
-  ell(ctx, 16, -44, 5.2, 5.2); paint(ctx, ball(ctx, 16, -45, 5, steel, 0.4, 0.3), 2.5);
-  // corps + plastron
-  const body = () => smooth(ctx, [[-15, -36], [-6, -46], [10, -46], [19, -32], [16, -12], [2, -6], [-12, -10], [-18, -22]]);
-  form(ctx, body, steel, -3, -30, 22, { light: 0.45, sh: 0.25 });
-  clipTo(ctx, body, () => {
-    ctx.strokeStyle = gold; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.moveTo(-18, -14); ctx.quadraticCurveTo(0, -8, 20, -14); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(1, -46); ctx.lineTo(1, -12); ctx.lineWidth = 1.4; ctx.strokeStyle = rgba('#7c88aa', 0.7); ctx.stroke();
-    gloss(ctx, -8, -34, 3, 8, 0.6, 0.2);
-    rr(ctx, -20, -22, 42, 5, 1); ctx.fillStyle = '#6a4a3a'; ctx.fill();
-    rr(ctx, -2, -23, 7, 7, 1.5); ctx.fillStyle = gold; ctx.fill();
+  const wing = B([[-6, -40], [10, -44], [24, -36], [27, -24], [12, -22], [-4, -26], [-15, -30]]);
+  fig(ctx, wing, P.wing, {
+    inside: () => { ctx.strokeStyle = OUT; ctx.lineWidth = 2.4; for (const x of [12, 19]) { ctx.beginPath(); ctx.moveTo(x - 3, -40); ctx.quadraticCurveTo(x + 2, -31, x - 1, -22); ctx.stroke(); } },
   });
-  body(); paint(ctx, null, LW);
+  ell(ctx, -16, -31, 4.4, 4.4); paint(ctx, P.wing, 2.4);
+  if (V === 1) pauldron(ctx, 6, -42, 7.5, 0.1);
   ctx.restore();
-  // jambe avant
-  rr(ctx, -10 + 3 * s, -18, 9, 14, 3); paint(ctx, vgrad(ctx, -18, -4, steel, 0.3, 0.25), 2.5);
-  rr(ctx, -15 + 3 * s, -7, 14, 7, 3); paint(ctx, vgrad(ctx, -7, 0, '#6e5a84', 0.3, 0.2), 2.5);
-  ctx.save(); ctx.translate(0, b * 1.4);
-  // oreilles
-  ear(ctx, 15, -76, 10.5, fur, pink, 0.4);
-  ear(ctx, -15, -79, 11, fur, pink, -0.4);
-  // tête
-  const head = () => smooth(ctx, [[-36, -55], [-29, -63], [-17, -70], [-2, -72], [11, -66], [14, -55], [9, -45], [-2, -41], [-16, -42], [-29, -47]]);
-  form(ctx, head, fur, -8, -58, 22);
-  clipTo(ctx, head, () => { ell(ctx, -26, -50, 11, 6.5, -0.2); fillA(ctx, '#ffffff', 0.35); });
-  // casque
-  const helm = () => smooth(ctx, [[-22, -64], [-16, -76], [-2, -82], [12, -78], [18, -66], [16, -54], [8, -52], [8, -62], [-4, -66], [-16, -62]]);
-  form(ctx, helm, steel, -2, -70, 20, { light: 0.45, sh: 0.25 });
-  clipTo(ctx, helm, () => {
-    ctx.strokeStyle = gold; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.moveTo(-24, -63); ctx.quadraticCurveTo(-6, -69, 10, -63); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(-2, -84); ctx.lineTo(-3, -66); ctx.lineWidth = 2; ctx.stroke();
+  // ----- tête
+  ctx.save();
+  ctx.translate(0, -a.up * 2.4 + [0, 0, 1, 0][a.f]);
+  squash(ctx, a, 0.5);
+  // cou irisé
+  fig(ctx, B([[-22, -48], [-14, -58], [2, -56], [6, -44], [-6, -36], [-19, -38]]), P.neck, { rim: false, glint: false, inside: () => { ctx.fillStyle = P.neck2; ell(ctx, 0, -42, 9, 6); ctx.fill(); } });
+  const head = E(-8, -61, 19, 17.5);
+  fig(ctx, head, P.gray, { crack: 9, cn: 1 });
+  // bec
+  const beak = B([[-25, -63], [-34, -61], [-41, -56], [-36, -53], [-25, -54]]);
+  fig(ctx, beak, P.beak, { rim: false, lw: 2.4, glint: false });
+  ctx.beginPath(); ctx.moveTo(-39, -56.5); ctx.lineTo(-27, -57.5); stroke(ctx, 1.8);
+  blob(ctx, -27, -62, 3.6, '#f6f3ff', { ry: 2.6, rim: false, lw: 1.8 });
+  // œil visible + cache-œil
+  const blink = a.f === 3;
+  eye(ctx, -5, -61, 7.4, { ry: 8.8, skin: P.gray, inner: -1, anger: 0.55, lid: 0.15, iris: P.iris, blink });
+  brow(ctx, 5, -73, -9, -69.5, 5);
+  ctx.beginPath(); ctx.moveTo(-24, -67); ctx.quadraticCurveTo(-12, -74, 9, -66); stroke(ctx, 2.6);
+  fig(ctx, B([[-25, -67], [-15, -68], [-14, -59], [-18, -55], [-24, -57]]), P.patch, { rim: false, lw: 2.4, hi: 0.25, size: 6 });
+  brow(ctx, -27, -72, -15, -70.5, 4.4);
+  fang(ctx, -31, -54, 3.6, 3, false);
+  // tricorne
+  ctx.save(); ctx.translate(-7, -76); ctx.rotate(-0.12 + a.s * 0.03);
+  if (V === 3) { flame(ctx, 12, -8, 7, a.ph, 0.3); } else {
+    limb(ctx, [[8, -9], [17, -16], [25, -15 + a.s * 2]], 6.5, 3, P.plume, { lw: 2.4 });
+  }
+  const hat = B([[-20, -1], [-14, -6], [-7, -15], [6, -15], [14, -6], [20, -1], [11, 2.5], [0, -1], [-11, 2.5]]);
+  fig(ctx, hat, P.hat, {
+    lw: 2.6, size: 14,
+    inside: () => { ctx.beginPath(); ctx.moveTo(-20, -1); ctx.quadraticCurveTo(-11, -4, 0, -2); ctx.quadraticCurveTo(11, -4, 20, -1); stroke(ctx, 4.6, P.trim); },
   });
-  helm(); paint(ctx, null, LW);
-  for (const [x, y] of [[12, -60], [14, -70]]) { ell(ctx, x, y, 1.3, 1.3); ctx.fillStyle = '#7c88aa'; ctx.fill(); }
-  // plumet
-  limb(ctx, [[-2, -82], [4, -92], [16, -97 + s], [26, -92 + s * 1.5]], 6, 3, vgrad(ctx, -100, -82, plume, 0.3, 0.2), 2.5);
-  limb(ctx, [[0, -84], [8, -92], [18, -92 + s]], 3, 1.6, shade(plume, 0.3), 0);
+  ell(ctx, 0, -8.5, 3.4, 3); ctx.fillStyle = '#ffffff'; ctx.fill();
+  rr(ctx, -2, -6.5, 4, 2.6, 0.8); ctx.fill();
+  ctx.fillStyle = OUT; ell(ctx, -1.2, -8.7, 0.95, 0.95); ctx.fill(); ell(ctx, 1.2, -8.7, 0.95, 0.95); ctx.fill();
+  ctx.restore();
+  if (V === 2) drip(ctx, -34, -53, 6, a.ph);
+  ctx.restore();
+  motes(ctx, a, 5, -34, -92, 70, 80);
+}
+
+// =====================================================================
+//  6. Crabe pinceur — docker bagarreur : pince géante tatouée, bonnet de marin
+// =====================================================================
+const CRAB = {
+  rim: '#5ad8ff',
+  red: ['#f0503c', 'b'], redD: ['#b8282c', 'b'], belly: ['#ffd2a8', 'b'], cap: ['#f6f4ff', 'c'], capBand: ['#2f4ab0', 'c'],
+  tattoo: ['#2f4ab0', 'k'], iris: ['#3d2a66', 'e'],
+};
+// Pince classique de dessin animé (pointe vers le haut en repère local) : paume + doigt fixe, doigt mobile.
+function bigClaw(ctx, x, y, s, rot, open, col, tattoo) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(rot); ctx.scale(s, s);
+  const lw = 3 / s;
+  ctx.save(); ctx.translate(6, -6); ctx.rotate(open); ctx.translate(-6, 6);
+  fig(ctx, B([[1, -5], [5, -17], [7, -27], [13, -25], [14, -13], [10, -3]], 0.5), shade(col, -0.1), { glint: false, lw });
+  ctx.restore();
+  const palm = B([[11, 8], [-3, 11], [-12, 3], [-13, -9], [-14, -22], [-9, -32], [-3, -27], [-5, -17], [0, -9], [8, -9], [13, -2]], 0.5);
+  fig(ctx, palm, col, {
+    lw, crack: 10, cn: 1, size: 13, cx: -2, cy: -6,
+    inside: () => {
+      if (!tattoo) return;
+      ctx.save(); ctx.translate(0, 0); ctx.strokeStyle = tattoo; ctx.lineWidth = 2.2; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(0, -5); ctx.lineTo(0, 5); ctx.moveTo(-3.2, -2.4); ctx.lineTo(3.2, -2.4); ctx.moveTo(-4.4, 1.6); ctx.quadraticCurveTo(0, 7, 4.4, 1.6); ctx.stroke();
+      ell(ctx, 0, -6.8, 1.7, 1.7); ctx.stroke();
+      ctx.restore();
+    },
+  });
+  ctx.restore();
+}
+function drawCrab(ctx, a, P) {
+  const s = a.step;
+  // pattes
+  for (const side of [1, -1]) {
+    for (let i = 0; i < 3; i++) {
+      const up = ((i + (side > 0 ? 1 : 0)) % 2 ? s : -s) * 2;
+      const x0 = side * (14 + i * 6), y0 = -16 + i * 2;
+      const kx = side * (28 + i * 6), ky = -24 + i * 3 - up;
+      const tx = side * (32 + i * 7), ty = -1 - Math.max(0, up);
+      limb(ctx, [[x0, y0], [kx, ky], [tx, ty]], 6.4, 2.6, side > 0 ? P.redD : shade(P.red, -0.05), { lw: 2.6, rim: side > 0 ? false : undefined });
+    }
+  }
+  ctx.save();
+  ctx.translate(0, -[0, 2, 0, 2][a.f]);
+  squash(ctx, a);
+  // petite pince (arrière)
+  limb(ctx, [[22, -26], [32, -30], [37, -38]], 6, 5, P.redD);
+  bigClaw(ctx, 38, -40, 0.5, 0.35, a.f % 2 ? 0.4 : 0.05, P.redD, null);
+  // yeux pédonculés
+  const blink = a.f === 3;
+  for (const [x, r, inner, h] of [[-15, 6.6, 1, 0], [3, 7.4, -1, 2]]) {
+    limb(ctx, [[x + 2, -38], [x + 1, -46 - h], [x, -50 - h]], 4.6, 4, P.red, { rim: false });
+  }
+  // carapace
+  const shell = B([[-34, -22], [-30, -35], [-18, -43], [0, -45], [18, -43], [30, -35], [34, -22], [27, -12], [0, -9], [-27, -12]]);
+  fig(ctx, shell, P.red, {
+    crack: 11,
+    inside: () => {
+      ell(ctx, 0, -11, 30, 6.5); ctx.fillStyle = P.belly; ctx.fill();
+      const rnd = seeded(3);
+      for (let i = 0; i < 6; i++) { ell(ctx, 4 + rnd() * 24, -38 + rnd() * 10, 1.8 + rnd(), 1.4 + rnd()); fillA(ctx, '#ffb69a', 0.75); }
+    },
+  });
+  for (const x of [-33, 33]) spike(ctx, x, -28, x < 0 ? Math.PI + 0.3 : -0.3, 6, 4.5, V === 1 ? P.gold : P.red);
+  if (V === 1) for (const x of [-12, 0, 12]) spike(ctx, x * 1.4 + 12, -42 + Math.abs(x) * 0.1, -Math.PI / 2 + x * 0.03, 7, 5, P.gold);
+  // bonnet de marin
+  ctx.save(); ctx.translate(20, -43); ctx.rotate(0.3);
+  fig(ctx, B([[-10, 0], [-9, -10], [0, -14], [9, -10], [10, 0]]), P.cap, { rim: false, lw: 2.6, size: 9 });
+  fig(ctx, RR(-12.5, -3.5, 25, 6.5, 3), P.capBand, { rim: false, lw: 2.4, glint: false });
+  ctx.restore();
   // yeux
-  eye(ctx, -20.5, -56, 5, 6.4, { lid: fur, inner: 1, anger: 0.5 });
-  eye(ctx, -6.5, -57, 6.6, 8, { lid: fur, inner: -1, anger: 0.5 });
-  brow(ctx, -26, -64, -17, -61, 3.2);
-  brow(ctx, 0, -66, -10, -63, 3.8);
+  eye(ctx, -15, -55, 6.6, { ry: 7.6, skin: P.red, inner: 1, anger: 0.6, lid: 0.12, iris: P.iris, blink });
+  eye(ctx, 3, -57, 7.4, { ry: 8.6, skin: P.red, inner: -1, anger: 0.6, lid: 0.12, iris: P.iris, blink });
+  brow(ctx, -24, -64, -10, -61, 4.6);
+  brow(ctx, 13, -68, -2, -64, 5);
+  // bouche grognon
+  const m = B([[-14, -25], [-5, -28], [5, -28], [11, -25], [5, -20], [-7, -20]]);
+  fig(ctx, m, '#6e1730', { rim: false, lw: 2.4, glint: false, hi: 0 });
+  fang(ctx, -10, -27.5, 4.5, 3.6); fang(ctx, 7, -27.5, 4.5, 3.6);
+  blush(ctx, -22, -26, 4, 2.4); blush(ctx, 18, -26, 4, 2.4);
+  if (V === 2) { drip(ctx, -2, -21, 7, a.ph); }
+  // pince géante levée (avant)
+  limb(ctx, [[-24, -28], [-35, -32], [-41, -42]], 9, 8, P.red);
+  bigClaw(ctx, -42, -47, 1.05, -0.3 + a.s * 0.06, a.f % 2 ? 0.5 : 0.04, P.red, P.tattoo);
+  ctx.restore();
+  motes(ctx, a, 6, -50, -76, 100, 60);
+}
+
+// =====================================================================
+//  7. Frelon — as de l'aviation : casque de cuir, lunettes, écharpe au vent, dard
+// =====================================================================
+const WASP = {
+  rim: '#ffb02e',
+  yel: ['#ffc81f', 'b'], blk: ['#33233f', 'k'], thorax: ['#6a4430', 'b'], leg: ['#4a3040', 'b'],
+  cap: ['#8a5434', 'c'], scarf: ['#ff3d4a', 'a'], lens: ['#7fe8ff', 'g'], rimG: ['#d9def0', 'm'],
+  wing: ['#d8f4ff', 'k'], iris: ['#d1213a', 'e'], sting: ['#e8e4f4', 'm'],
+};
+function drawWasp(ctx, a, P) {
+  ctx.save();
+  ctx.translate(0, a.hov);
+  const flap = a.f % 2;
+  const wingC = rgba(P.wing, 0.6);
+  const wingSet = (front) => {
+    const ang = flap ? -0.5 : 0.22;
+    for (const [rx, ry, rot] of front ? [[17, 7, -1.3]] : [[23, 9.5, -0.7], [27, 11, -1.1]]) {
+      ctx.save(); ctx.translate(12, -92); ctx.rotate(ang + (front ? 0.15 : 0));
+      const cx = Math.cos(rot) * rx * 0.95, cy = Math.sin(rot) * rx * 0.95;
+      ell(ctx, cx, cy, rx, ry, rot); paint(ctx, wingC, 2.6);
+      ell(ctx, cx - 3, cy - 2, rx * 0.5, ry * 0.3, rot); fillA(ctx, '#ffffff', 0.65);
+      ctx.restore();
+    }
+  };
+  wingSet(false);
+  // dard + abdomen rayé
+  fig(ctx, B([[44, -62], [50, -64], [53, -55], [57, -46], [50, -53]], 0.4), P.sting, { rim: false, lw: 2.4, glint: false });
+  const abd = B([[16, -84], [30, -89], [44, -81], [51, -66], [45, -57], [30, -60], [18, -70]]);
+  fig(ctx, abd, P.yel, {
+    crack: 12, cn: 2,
+    inside: () => {
+      ctx.fillStyle = P.blk;
+      for (const t of [0.3, 0.58, 0.85]) {
+        const cx = 16 + t * 36, cy = -86 + t * 26;
+        ctx.save(); ctx.translate(cx, cy); ctx.rotate(0.65); rr(ctx, -30, -3.8, 60, 7.6, 2); ctx.fill(); ctx.restore();
+      }
+    },
+  });
+  if (V === 1) for (const t of [0.2, 0.5, 0.8]) { const p = along([[18, -84], [32, -89], [46, -79]], t); spike(ctx, p.x, p.y - 1, -Math.PI / 2 + 0.35, 8, 5, P.gold); }
+  // pattes pendantes
+  for (const [x, dx] of [[4, -3], [12, 1]]) {
+    limb(ctx, [[x, -76], [x + dx - 2, -66], [x + dx + 1 + a.s * 1.5, -59]], 4.6, 3.6, P.leg, { lw: 2.4, rim: false });
+    blob(ctx, x + dx + a.s * 1.5, -58, 3, P.blk, { lw: 2, rim: false, glint: false });
+  }
+  // thorax
+  fig(ctx, E(10, -82, 12, 11), P.thorax, { inside: () => { ell(ctx, 7, -86, 6, 3.6); fillA(ctx, P.yel, 0.5); } });
+  // écharpe (au vent)
+  const w = a.ph;
+  limb(ctx, [[2, -80], [18, -82 + Math.sin(w) * 2], [33, -88 + Math.sin(w + 1.2) * 4], [47, -90 + Math.sin(w + 2.4) * 5]], 8.5, 5, shade(P.scarf, -0.12), { lw: 2.6 });
+  // tête
+  const head = E(-14, -92, 21, 19.5);
+  fig(ctx, head, P.yel, { crack: 13, cn: 1, inside: () => { ell(ctx, -18, -76, 16, 6); ctx.fillStyle = shade(P.yel, 0.25); ctx.fill(); } });
+  // casque d'aviateur
+  const cap = B([[-35, -97], [-31, -108], [-17, -114], [0, -111], [7, -97], [6, -82], [-1, -80], [-3, -93], [-14, -100], [-28, -100]]);
+  fig(ctx, cap, P.cap, { lw: 2.8, size: 15, inside: () => { ctx.beginPath(); ctx.moveTo(-17, -114); ctx.quadraticCurveTo(-8, -104, 2, -96); stroke(ctx, 2, rgba(OUT, 0.5)); } });
+  // antennes à travers le casque
+  limb(ctx, [[-24, -110], [-30, -119], [-38, -122 + a.s]], 3.6, 2.8, P.blk, { rim: false, lw: 2 });
+  limb(ctx, [[-10, -112], [-11, -122], [-16, -128 + a.s]], 3.6, 2.8, P.blk, { rim: false, lw: 2 });
+  blob(ctx, -38.5, -122 + a.s, 3.2, P.yel, { lw: 2, rim: false }); blob(ctx, -16.5, -128 + a.s, 3.2, P.yel, { lw: 2, rim: false });
+  // lunettes relevées sur le front
+  ctx.beginPath(); ctx.moveTo(-33, -103); ctx.lineTo(4, -106); stroke(ctx, 4.4, P.blk);
+  for (const [x, y, r] of [[-27, -104, 6.2], [-11, -106, 6.8]]) {
+    blob(ctx, x, y, r, P.rimG, { lw: 2.4, rim: false, glint: false });
+    blob(ctx, x, y, r * 0.64, P.lens, { lw: 1.8, rim: false, hi: 0.4 });
+  }
+  // yeux
+  const blink = a.f === 3;
+  eye(ctx, -26, -89, 6.6, { ry: 7.8, skin: P.yel, inner: 1, anger: 0.62, lid: 0.12, iris: P.iris, blink });
+  eye(ctx, -9, -90, 8, { ry: 9.2, skin: P.yel, inner: -1, anger: 0.62, lid: 0.12, iris: P.iris, blink });
+  brow(ctx, -35, -97, -21, -94.5, 4.6);
+  brow(ctx, 2, -99.5, -14, -96.5, 5);
+  // mandibules-crocs + sourire
+  ctx.beginPath(); ctx.moveTo(-31, -78); ctx.quadraticCurveTo(-22, -73.5, -12, -77); stroke(ctx, 2.8);
+  limb(ctx, [[-31, -76.5], [-36, -72], [-33, -67]], 4.8, 2.6, P.blk, { lw: 1.8, rim: false });
+  limb(ctx, [[-15, -75.5], [-17, -70], [-13, -66.5]], 4.8, 2.6, P.blk, { lw: 1.8, rim: false });
+  fang(ctx, -24, -75.4, 4, 3.2);
+  blush(ctx, -3, -80, 4, 2.4);
+  // écharpe (tour de cou)
+  limb(ctx, [[-14, -73], [-1, -74], [8, -79]], 9, 9, P.scarf, { lw: 2.6, rim: false });
+  // bras avant (poing levé)
+  limb(ctx, [[-6, -72], [-18, -68], [-27, -72 + a.s * 2]], 5.6, 5, P.thorax, { rim: false });
+  blob(ctx, -29, -73 + a.s * 2, 4.8, P.yel, { lw: 2.4, rim: false });
+  if (V === 3) { flame(ctx, -20, -113, 6.5, a.ph, -0.1); flame(ctx, -6, -111, 5.5, a.ph + 2); }
+  if (V === 2) drip(ctx, 56, -48, 7, a.ph);
+  wingSet(true);
+  ctx.restore();
+  motes(ctx, a, 7, -40, -130, 95, 80);
+}
+
+// =====================================================================
+//  8. Taupe mineuse — dynamiteuse : casque de chantier à lampe, lunettes noires, salopette, dynamite
+// =====================================================================
+const MOLE = {
+  rim: '#ffd23a',
+  fur: ['#6e5a7a', 'b'], light: ['#a894b2', 'b'], skin: ['#ffa3bf', 'd'], nose: ['#ff6f96', 'd'],
+  over: ['#3f6fd8', 'c'], strap: ['#2c4ca8', 'c'], hat: ['#ffcc2a', 'a'], lamp: ['#fff2a0', 'g'], btn: ['#ffc83a', 'm'],
+  dyn: ['#e8333f', 'k'], shade: ['#1d1430', 'k'], claw: ['#fff4e2', 'k'],
+};
+function drawMole(ctx, a, P) {
+  const st = a.step;
+  const foot = (x, y, c) => {
+    fig(ctx, B([[x - 9, y], [x - 9, y - 5], [x - 2, y - 8], [x + 6, y - 6], [x + 7, y - 1], [x + 3, y + 0.4]]), c, { rim: false, glint: false });
+    for (const dx of [-9.5, -6.5, -3.5]) { poly(ctx, [[x + dx, y - 1.8], [x + dx + 2.8, y - 1.8], [x + dx - 1.2, y + 1.2]]); paint(ctx, P.claw, 1.4); }
+  };
+  const bx = 9 - st * 3.5, by = a.lift === -1 ? -3.5 : 0;
+  const fx = -8 + st * 3.5, fy = a.lift === 1 ? -3.5 : 0;
+  foot(bx, by, shade(P.skin, -0.15));
+  foot(fx, fy, P.skin);
+  ctx.save();
+  ctx.translate(0, -a.up * 1.3);
+  squash(ctx, a);
+  // bras arrière
+  limb(ctx, [[12, -30], [21, -24], [22, -16]], 8, 7, shade(P.fur, -0.12));
+  blob(ctx, 22, -15, 5, shade(P.skin, -0.12), { rim: false });
+  // corps + salopette
+  const body = B([[-16, -34], [-6, -42], [10, -41], [19, -28], [18, -10], [6, -4], [-10, -5], [-18, -16]]);
+  fig(ctx, body, P.fur, {
+    crack: 14, cn: 2,
+    inside: () => {
+      fig(ctx, B([[-20, -24], [-8, -27], [6, -27], [22, -24], [22, 0], [-20, 0]], 0.2), P.over, { rim: false, lw: 2.6 });
+      fig(ctx, RR(-10, -24, 13, 9, 2), shade(P.over, -0.1), { rim: false, lw: 2, glint: false });
+      limb(ctx, [[-7, -40], [-6, -25]], 4.4, 4.4, P.strap, { rim: false, lw: 2 });
+      limb(ctx, [[8, -40], [10, -25]], 4.4, 4.4, P.strap, { rim: false, lw: 2 });
+      blob(ctx, -6, -26, 2.3, P.btn, { lw: 1.6, rim: false, glint: false }); blob(ctx, 10, -26, 2.3, P.btn, { lw: 1.6, rim: false, glint: false });
+    },
+  });
+  if (V === 1) pauldron(ctx, 12, -36, 8, 0.45);
+  ctx.restore();
+  // ----- tête
+  ctx.save();
+  ctx.translate(0, -a.up * 2.2);
+  squash(ctx, a, 0.6);
+  const head = B([[-34, -50], [-28, -60], [-16, -68], [0, -70], [13, -64], [17, -52], [12, -40], [0, -35], [-15, -37], [-28, -42]]);
+  fig(ctx, head, P.fur, { crack: 15, cn: 1, inside: () => { ell(ctx, -22, -44, 13, 8, -0.1); ctx.fillStyle = P.light; ctx.fill(); } });
+  // casque de chantier + lampe
+  ctx.save(); ctx.translate(-2, -66); ctx.rotate(-0.12);
+  const hat = B([[-20, 2], [-17, -9], [-6, -17], [8, -17], [17, -9], [19, 2]]);
+  fig(ctx, hat, P.hat, { lw: 2.8, size: 15, inside: () => { ctx.beginPath(); ctx.moveTo(0, -17); ctx.lineTo(0, 1); stroke(ctx, 3, shade(P.hat, -0.25)); } });
+  fig(ctx, RR(-25, -0.5, 47, 5.5, 2.7), shade(P.hat, -0.08), { rim: false, lw: 2.6, glint: false });
+  glow(ctx, -21, -8, 18, P.lamp, a.f % 2 ? 0.75 : 0.55);
+  fig(ctx, RR(-26, -13, 9, 10, 3), '#4a4060', { rim: false, lw: 2.4, glint: false });
+  blob(ctx, -26, -8, 4, P.lamp, { lw: 2.2, rim: false, hi: 0.4 });
+  if (V === 3) { flame(ctx, 2, -16, 7, a.ph); flame(ctx, 11, -13, 5.5, a.ph + 2, 0.2); }
+  ctx.restore();
+  // lunettes noires rondes + sourcils
+  brow(ctx, -26, -60, -14, -57.5, 4.4);
+  brow(ctx, 6, -61, -6, -58.5, 4.6);
+  ctx.beginPath(); ctx.moveTo(-14, -52); ctx.lineTo(-9, -52); ctx.moveTo(3, -52); ctx.lineTo(13, -55); stroke(ctx, 2.6);
+  for (const [x, r] of [[-19, 6], [-2, 7]]) {
+    fig(ctx, E(x, -51, r, r * 0.9), P.shade, {
+      rim: false, lw: 2.6, glint: false, hi: 0,
+      inside: () => {
+        if (EYEG) { glow(ctx, x - 1, -51, r * 1.2, EYEG, 0.9); ell(ctx, x - 1, -51, r * 0.45, r * 0.3); ctx.fillStyle = EYEG; ctx.fill(); }
+        poly(ctx, [[x - r * 0.6, -51 + r], [x - r * 0.15, -51 + r], [x + r * 0.5, -51 - r], [x + r * 0.05, -51 - r]]); fillA(ctx, '#ffffff', 0.35);
+      },
+    });
+  }
+  // nez + dents
+  blob(ctx, -35, -48, 5.4, P.nose, { ry: 4.6, rim: false, lw: 2.4 });
+  ctx.beginPath(); ctx.moveTo(-31, -42); ctx.quadraticCurveTo(-20, -37.5, -10, -41); stroke(ctx, 2.6);
+  for (const x of [-27, -23]) { rr(ctx, x - 1.9, -41.6, 3.8, 6, 1.2); paint(ctx, V === 1 && x > -25 ? P.gold : WHITE, 1.8); }
+  fang(ctx, -13, -40.4, 3.6, 3);
+  blush(ctx, -6, -43, 4, 2.4);
+  if (V === 2) drip(ctx, -11, -39, 7, a.ph);
+  ctx.restore();
+  // bras avant + bâton de dynamite (mèche qui crépite)
+  ctx.save(); ctx.translate(0, -a.up * 1.3);
+  const hx = -23, hy = -20 + st;
+  ctx.save(); ctx.translate(hx, hy); ctx.rotate(-1.05);
+  fig(ctx, RR(-3.6, -16, 7.2, 22, 2.5), P.dyn, { rim: false, lw: 2.4, inside: () => { ctx.fillStyle = shade(P.dyn, -0.25); ctx.fillRect(-4, -11, 8, 2); ctx.fillRect(-4, 1, 8, 2); } });
+  ctx.beginPath(); ctx.moveTo(0, -16); ctx.quadraticCurveTo(3, -20, 1, -23); stroke(ctx, 2.2, '#5a4a40');
+  glow(ctx, 1, -24, 10, '#ffcc33', 0.9);
+  for (let i = 0; i < 4; i++) { const t = i * Math.PI / 2 + a.f * 0.8; sparkle(ctx, 1 + Math.cos(t) * 3.2, -24 + Math.sin(t) * 3.2, 2.6 + (i === a.f ? 1.4 : 0), i % 2 ? '#ffd23a' : '#ffffff'); }
+  ctx.restore();
+  limb(ctx, [[-10, -32], [-18, -26], [hx + 2, hy + 1]], 8, 7, P.fur);
+  blob(ctx, hx, hy, 5.5, P.skin, { rim: false });
+  ctx.restore();
+  motes(ctx, a, 8, -34, -86, 64, 80);
+}
+
+// =====================================================================
+//  9. Bonhomme de neige maléfique — hooligan des neiges : bonnet à pompon, écharpe, boule de neige
+// =====================================================================
+const YETI = {
+  rim: '#8fe8ff',
+  snow: ['#f2f6ff', 'b'], snowS: ['#cdd9f2', 'b'], coal: ['#2e2638', 'k'], twig: ['#7a4a2e', 'k'], carrot: ['#ff8a2a', 'd'],
+  hat: ['#e8334a', 'a'], hat2: ['#fff4f0', 'c'], scarf: ['#2f9a6a', 'c'], scarf2: ['#ffd23a', 'c'], iris: ['#2e2638', 'e'],
+};
+function drawYeti(ctx, a, P) {
+  const sq = [[1.08, 0.93], [0.95, 1.05], [1.08, 0.93], [0.95, 1.05]][a.f];
+  ctx.save();
+  ctx.translate(0, -a.up * 3);
+  ctx.scale(sq[0], sq[1]);
+  // bras arrière levé avec boule de neige
+  const ra = a.s * 0.12;
+  ctx.save(); ctx.translate(16, -46); ctx.rotate(ra);
+  limb(ctx, [[0, 0], [10, -10], [14, -24]], 4.4, 3.4, P.twig, { rim: false, lw: 2.4 });
+  limb(ctx, [[10, -10], [17, -12]], 3, 2.4, P.twig, { rim: false, lw: 2 });
+  blob(ctx, 14, -30, 8, P.snow, { rim: undefined });
+  ctx.restore();
+  // boule du bas
+  const low = E(2, -25, 27, 24);
+  fig(ctx, low, P.snow, { crack: 16, cn: 2, inside: () => { ell(ctx, 10, -6, 22, 8); ctx.fillStyle = rgba(P.snowS, 0.8); ctx.fill(); } });
+  for (const y of [-34, -22, -10]) blob(ctx, -12 + (y + 34) * 0.1, y, 3, P.coal, { lw: 1.6, rim: false });
+  // écharpe
+  const w = a.ph;
+  limb(ctx, [[12, -50], [22, -46 + Math.sin(w) * 2], [31, -40 + Math.sin(w + 1.3) * 3], [38, -44 + Math.sin(w + 2.5) * 4]], 8, 6, P.scarf, { lw: 2.6 });
+  // boule de la tête
+  const head = E(-2, -68, 24, 22);
+  fig(ctx, head, P.snow, { crack: 17, cn: 1 });
+  limb(ctx, [[-22, -50], [-6, -47.5], [12, -50]], 9, 9, P.scarf, { lw: 2.6, inside: () => { ctx.fillStyle = P.scarf2; for (let x = -18; x < 14; x += 8) ctx.fillRect(x, -56, 3.5, 12); } });
+  // bonnet rayé à pompon
+  ctx.save(); ctx.translate(2, -86); ctx.rotate(0.12);
+  const hat = B([[-20, 4], [-19, -6], [-10, -15], [4, -17], [16, -10], [21, 4]]);
+  fig(ctx, hat, P.hat, { lw: 2.8, size: 15, inside: () => { ctx.fillStyle = P.hat2; for (const y of [-10, -3]) ctx.fillRect(-24, y, 48, 3.6); } });
+  fig(ctx, RR(-22, 1, 45, 7, 3.4), P.hat2, { rim: false, lw: 2.6, glint: false });
+  if (V === 3) flame(ctx, 8, -15, 8, a.ph, 0.2);
+  else blob(ctx, 10 + a.s, -18, 6, P.hat2, { lw: 2.6 });
+  ctx.restore();
+  // visage
+  brow(ctx, -26, -84, -13, -79, 5, P.twig);
+  brow(ctx, 6, -85, -6, -80, 5.2, P.twig);
+  const blink = a.f === 3;
+  eye(ctx, -18, -73, 5.6, { ry: 6.6, skin: P.snow, inner: 1, anger: 0.55, lid: 0.12, iris: P.iris, blink });
+  eye(ctx, -2, -74, 6.6, { ry: 7.8, skin: P.snow, inner: -1, anger: 0.55, lid: 0.12, iris: P.iris, blink });
+  // carotte
+  fig(ctx, B([[-15, -68], [-30, -66], [-45, -63], [-30, -60.5], [-15, -62]], 0.4), P.carrot, { rim: false, lw: 2.6, size: 8, inside: () => { ctx.beginPath(); ctx.moveTo(-25, -67); ctx.lineTo(-26, -63); ctx.moveTo(-33, -65); ctx.lineTo(-33.5, -62); stroke(ctx, 1.4, rgba(OUT, 0.6)); } });
+  // sourire en charbon
+  const m = B([[-21, -59], [-11, -57], [2, -58], [8, -61], [4, -53], [-8, -51], [-18, -54]]);
+  fig(ctx, m, P.coal, {
+    rim: false, lw: 2.6, glint: false, hi: 0,
+    inside: () => { ctx.fillStyle = WHITE; for (let i = 0; i < 4; i++) { const x = -17 + i * 6.3; poly(ctx, [[x, -61], [x + 5, -61], [x + 2.5, -55.5]]); ctx.fill(); } },
+  });
+  blush(ctx, 8, -64, 4, 2.4);
+  if (V === 1) { pauldron(ctx, 14, -46, 8, 0.5); for (const x of [-14, -4, 6]) spike(ctx, x, -96 + Math.abs(x + 4) * 0.2, -Math.PI / 2 + x * 0.03, 8, 5, P.gold); }
+  if (V === 2) drip(ctx, -6, -52, 8, a.ph);
+  // bras avant (branche griffue)
+  limb(ctx, [[-20, -40], [-32, -36 + a.s * 2], [-40, -40 + a.s * 2]], 4.6, 3.4, P.twig, { rim: false, lw: 2.4 });
+  for (const d of [-0.6, 0.3]) limb(ctx, [[-40, -40 + a.s * 2], [-40 - 6 * Math.cos(d), -40 + a.s * 2 + 6 * Math.sin(d)]], 3, 2.2, P.twig, { rim: false, lw: 2 });
+  limb(ctx, [[-32, -36 + a.s * 2], [-34, -30 + a.s * 2]], 3, 2.2, P.twig, { rim: false, lw: 2 });
+  ctx.restore();
+  motes(ctx, a, 9, -40, -110, 80, 100);
+}
+
+// =====================================================================
+//  10. Toutou-Tron — chien-robot de patrouille : gyrophare, visière LED, mâchoire d'acier
+// =====================================================================
+const ROBO = {
+  rim: '#4aa9ff',
+  steel: ['#b9c4e2', 'b'], steelD: ['#7d88b0', 'b'], dark: ['#2a2742', 'k'], panel: ['#3f5bc8', 'c'],
+  led: ['#3fe8ff', 'e'], siren1: ['#ff2a48', 'g'], siren2: ['#2a8bff', 'g'], stud: ['#d9def0', 'm'], tooth: ['#f4f6ff', 'k'],
+};
+function drawRobodog(ctx, a, P) {
+  const st = a.step;
+  // pattes à piston
+  const leg = (x, top, swing, col, front) => {
+    const fx = x + swing * 4;
+    limb(ctx, [[x, top], [x + swing * 2, top + 12], [fx, -6]], 7, 6, col, { rim: front ? undefined : false });
+    blob(ctx, x + swing, top + 10, 3.4, P.dark, { lw: 2, rim: false, glint: false });
+    fig(ctx, B([[fx - 7, 0], [fx - 7, -5], [fx - 2, -8], [fx + 4, -7], [fx + 5, -1], [fx + 2, 0.4]]), P.dark, { rim: false, glint: false });
+  };
+  leg(28, -30, -st, P.steelD, false);
+  leg(-2, -30, st, P.steelD, false);
+  ctx.save();
+  ctx.translate(0, -a.up * 1.4);
+  squash(ctx, a, 0.8);
+  // queue-antenne
+  limb(ctx, [[36, -42], [44, -50], [47 + a.s * 2, -58]], 3.2, 2.4, P.steelD, { rim: false, lw: 2.2 });
+  glow(ctx, 47 + a.s * 2, -60, 8, P.led, 0.7); blob(ctx, 47 + a.s * 2, -60, 3.4, P.led, { lw: 2, rim: false });
+  // corps
+  const body = B([[-12, -52], [8, -55], [34, -52], [41, -42], [38, -28], [24, -24], [-4, -24], [-14, -32]], 0.4);
+  fig(ctx, body, P.steel, {
+    crack: 18, cn: 2,
+    inside: () => {
+      fig(ctx, RR(4, -50, 28, 15, 4), P.panel, { rim: false, lw: 2.4, inside: () => { ctx.fillStyle = P.led; for (let i = 0; i < 3; i++) ctx.fillRect(9 + i * 7, -45, 4, 5); } });
+      ctx.fillStyle = shade(P.steel, -0.3); for (const x of [-6, 36]) { ell(ctx, x, -44, 1.6, 1.6); ctx.fill(); ell(ctx, x, -32, 1.6, 1.6); ctx.fill(); }
+    },
+  });
+  if (V === 1) { for (const x of [4, 14, 24, 34]) spike(ctx, x, -53, -Math.PI / 2 + 0.2, 8, 5, P.gold); }
+  ctx.restore();
+  leg(30, -30, st * 0.8, P.steel, true);
+  leg(0, -30, -st * 0.8, P.steel, true);
+  // ----- tête
+  ctx.save();
+  ctx.translate(0, -a.up * 2.4);
+  squash(ctx, a, 0.5);
+  // collier à pics
+  limb(ctx, [[-12, -56], [-4, -50], [6, -50]], 7, 7, P.dark, { rim: false });
+  for (const t of [0.2, 0.55, 0.9]) { const p = along([[-12, -56], [-4, -50], [6, -50]], t); spike(ctx, p.x, p.y + 2, Math.PI / 2, 5.5, 4.2, P.stud, 1.6); }
+  // oreilles-ailerons
+  fig(ctx, PL([[-6, -86], [4, -102], [8, -84]]), P.steelD, { glint: false });
+  fig(ctx, PL([[-20, -88], [-17, -104], [-8, -88]]), P.steel, { glint: false });
+  const head = B([[-44, -66], [-42, -80], [-32, -90], [-10, -92], [6, -86], [10, -70], [6, -58], [-12, -54], [-34, -56]], 0.4);
+  fig(ctx, head, P.steel, { crack: 19, cn: 1 });
+  // gyrophare (alterne rouge / bleu)
+  const sc = a.f % 2 ? P.siren2 : P.siren1;
+  glow(ctx, -18, -100, 20, sc, 0.7);
+  fig(ctx, RR(-23, -96, 11, 6, 1.5), P.dark, { rim: false, lw: 2.2, glint: false });
+  fig(ctx, B([[-22, -95], [-22, -103], [-17.5, -107], [-13, -103], [-13, -95]], 0.4), sc, { rim: false, lw: 2.4, hi: 0.4, size: 6 });
+  // visière LED
+  const vis = RR(-44, -82, 42, 13, 6);
+  fig(ctx, vis, '#191230', {
+    rim: false, lw: 2.8, glint: false, hi: 0.08,
+    inside: () => {
+      const L = P.led;
+      glow(ctx, -24, -75, 24, L, 0.4);
+      ctx.fillStyle = L;
+      if (a.f === 3) { ctx.fillRect(-38, -76, 10, 2.6); ctx.fillRect(-20, -76, 11, 2.6); }
+      else {
+        poly(ctx, [[-39, -80], [-28, -76.5], [-28, -72.5], [-39, -74]]); ctx.fill();
+        poly(ctx, [[-8, -80.5], [-20, -76.5], [-20, -72.5], [-8, -74.5]]); ctx.fill();
+        ctx.fillStyle = mix(L, '#ffffff', 0.75);
+        poly(ctx, [[-37, -77.6], [-30, -75.5], [-30, -74.6], [-37, -75.8]]); ctx.fill();
+        poly(ctx, [[-10, -78], [-18, -75.6], [-18, -74.6], [-10, -76]]); ctx.fill();
+      }
+    },
+  });
+  // mâchoire d'acier (s'ouvre et se ferme)
+  const open = [1, 4, 2, 4][a.f];
+  ctx.save(); ctx.translate(-8, -60); ctx.rotate(open * 0.05);
+  fig(ctx, B([[-38, 0], [-30, -2], [0, -2], [4, 4], [-6, 10], [-32, 9]], 0.4), P.steelD, {
+    rim: undefined, lw: 2.8, glint: false,
+    inside: () => { ctx.fillStyle = '#5a1730'; ctx.fillRect(-40, -4, 46, 5); },
+  });
+  for (let i = 0; i < 5; i++) { poly(ctx, [[-35 + i * 6, -1], [-30 + i * 6, -1], [-32.5 + i * 6, -6]]); paint(ctx, P.tooth, 1.6); }
+  ctx.restore();
+  for (let i = 0; i < 5; i++) { poly(ctx, [[-44 + i * 6, -59], [-39 + i * 6, -59], [-41.5 + i * 6, -54]]); paint(ctx, P.tooth, 1.6); }
+  blob(ctx, -45, -66, 4.2, P.dark, { rim: false, lw: 2.2 });
+  if (V === 2) drip(ctx, -30, -50, 8, a.ph);
+  if (V === 3) { flame(ctx, 2, -86, 6, a.ph, 0.1); flame(ctx, -30, -90, 5.5, a.ph + 2, -0.1); }
+  ctx.restore();
+  motes(ctx, a, 10, -44, -108, 90, 90);
+}
+
+// =====================================================================
+//  11. Gloop de lave — blob caïd : casquette à l'envers, croûte de lave, poing visqueux
+// =====================================================================
+const SLIME = {
+  rim: '#ffe24a',
+  lava: ['#ff7a22', 'b'], hot: ['#ffd23a', 'd'], crust: ['#6a2418', 'k'],
+  cap: ['#5b3ab8', 'c'], capF: ['#ffffff', 'c'], btn: ['#ffc83a', 'm'], iris: ['#7a1a10', 'e'],
+};
+function drawSlime(ctx, a, P) {
+  const [sx, sy, dy] = [[1.14, 0.88, 0], [0.92, 1.1, 0], [0.98, 1.03, -5], [1.04, 0.97, -2]][a.f];
+  ctx.save();
+  ctx.translate(0, dy);
+  ctx.scale(sx, sy);
+  // gouttes au sol / côtés
+  blob(ctx, 30, -4, 4.5, shade(P.lava, -0.1), { rim: false, lw: 2.4 });
+  // poing arrière
+  limb(ctx, [[26, -22], [36, -26], [40, -34 + a.s * 2]], 9, 7, shade(P.lava, -0.12), { rim: false });
+  blob(ctx, 41, -36 + a.s * 2, 6.2, shade(P.lava, -0.08), { rim: false });
+  const body = B([[-32, -4], [-34, -22], [-26, -40], [-11, -52], [6, -55], [22, -47], [32, -28], [34, -6], [22, 0], [0, 1], [-22, 0]]);
+  fig(ctx, body, P.lava, {
+    crack: 20, cn: 3,
+    inside: () => {
+      ell(ctx, -4, -6, 26, 8); ctx.fillStyle = rgba(P.hot, 0.55); ctx.fill();
+      for (const [x, y, r] of [[18, -36, 7], [26, -16, 5.5], [8, -48, 4.5], [-27, -10, 4]]) {
+        fig(ctx, B([[x - r, y], [x - r * 0.4, y - r * 0.9], [x + r * 0.7, y - r * 0.7], [x + r, y + r * 0.2], [x + r * 0.2, y + r * 0.8], [x - r * 0.7, y + r * 0.6]], 0.4), P.crust, { rim: false, lw: 2, glint: false, hi: 0.15 });
+      }
+      for (const [x, y, r] of [[-20, -38, 2.6], [12, -26, 2], [-28, -22, 1.6]]) { ell(ctx, x, y, r, r); ctx.fillStyle = P.hot; ctx.fill(); }
+    },
+  });
+  // casquette à l'envers
+  ctx.save(); ctx.translate(2, -52); ctx.rotate(0.15);
+  fig(ctx, RR(6, -2, 24, 6, 3), shade(P.cap, -0.12), { rim: false, lw: 2.6, glint: false });
+  const cap = B([[-16, 2], [-15, -8], [-6, -15], [6, -15], [14, -8], [16, 2]]);
+  fig(ctx, cap, P.cap, { lw: 2.8, size: 13, inside: () => { ell(ctx, -11, -4, 7, 9); ctx.fillStyle = P.capF; ctx.fill(); ell(ctx, -11, -4, 7, 9); stroke(ctx, 2); } });
+  blob(ctx, 0, -15, 2.6, P.btn, { lw: 1.8, rim: false, glint: false });
+  if (V === 1) for (const x of [-8, 0, 8]) spike(ctx, x, -14 + Math.abs(x) * 0.15, -Math.PI / 2 + x * 0.05, 8, 5, P.gold);
+  if (V === 3) { flame(ctx, -6, -14, 6, a.ph, -0.2); flame(ctx, 8, -13, 7, a.ph + 2); }
+  ctx.restore();
+  // visage
+  const blink = a.f === 3;
+  eye(ctx, -16, -33, 7, { ry: 8.2, skin: P.lava, inner: 1, anger: 0.6, lid: 0.12, iris: P.iris, blink });
+  eye(ctx, 3, -35, 8.2, { ry: 9.6, skin: P.lava, inner: -1, anger: 0.6, lid: 0.12, iris: P.iris, blink });
+  brow(ctx, -26, -44, -11, -40, 5);
+  brow(ctx, 14, -48, -2, -43, 5.4);
+  const m = B([[-25, -21], [-14, -18.5], [0, -19], [10, -22], [6, -11], [-8, -8], [-20, -12]]);
+  fig(ctx, m, '#5a1020', {
+    rim: false, lw: 2.6, glint: false, hi: 0,
+    inside: () => { ell(ctx, -6, -8, 9, 5); ctx.fillStyle = '#ff6d8a'; ctx.fill(); },
+  });
+  fang(ctx, -20, -20, 5, 4); fang(ctx, 4, -20.5, 5, 4);
+  if (V === 1) { pauldron(ctx, 22, -42, 8, 0.6); fig(ctx, RR(-10, -20, 6, 4.4, 1.4), P.gold, { rim: false, lw: 1.6, glint: false }); }
+  // poing avant
+  limb(ctx, [[-26, -16], [-36, -20], [-42, -28 - a.s * 2]], 10, 8, P.lava);
+  blob(ctx, -43, -30 - a.s * 2, 7, P.lava, { inside: () => { ctx.beginPath(); ctx.moveTo(-49, -31 - a.s * 2); ctx.lineTo(-44, -30 - a.s * 2); ctx.moveTo(-49, -27 - a.s * 2); ctx.lineTo(-44, -26.5 - a.s * 2); stroke(ctx, 1.8); } });
+  if (V === 2) { drip(ctx, -14, -2, 6, a.ph); drip(ctx, 14, -1, 8, a.ph + 2); }
+  ctx.restore();
+  // braises de lave (toujours), en plus des particules de variante
+  if (V !== 2) for (let i = 0; i < 2; i++) { const ph = (a.f / 4 + i * 0.5) % 1; const x = -8 + i * 22, y = -62 - ph * 14; glow(ctx, x, y, 6, '#ff7a1a', 0.6 * (1 - ph)); ell(ctx, x, y, 1.6, 1.6); ctx.fillStyle = '#ffd27a'; ctx.fill(); }
+  motes(ctx, a, 11, -40, -80, 80, 70);
+}
+
+// =====================================================================
+//  12. Souris martienne — pilote de soucoupe : casque-bulle, antenne, canon à rayons
+// =====================================================================
+const UFO = {
+  rim: '#ff5ad8',
+  skin: ['#8fe36a', 'b'], skinL: ['#d4f7b0', 'b'], ear: ['#ff9ec0', 'd'],
+  hull: ['#b8bfe0', 'm'], hullD: ['#6c74a6', 'm'], band: ['#5b3ab8', 'c'], light1: ['#ffe24a', 'g'], light2: ['#46e8ff', 'g'],
+  ray: ['#ff4fd8', 'g'], iris: ['#c2187a', 'e'], glass: ['#bff4ff', 'k'],
+};
+function drawUfo(ctx, a, P) {
+  ctx.save();
+  ctx.translate(0, a.hov);
+  // faisceau sous la soucoupe
+  ctx.save();
+  const g = ctx.createLinearGradient(0, -34, 0, -6);
+  g.addColorStop(0, rgba(P.light2, 0.45)); g.addColorStop(1, rgba(P.light2, 0));
+  ctx.fillStyle = g; poly(ctx, [[-14, -34], [14, -34], [22, -6], [-22, -6]]); ctx.fill();
+  ctx.restore();
+  // oreilles (hors du casque)
+  const ear = (x, y, r, c) => {
+    fig(ctx, E(x, y, r, r * 0.95), c, { inside: () => { ell(ctx, x + r * 0.05, y + r * 0.1, r * 0.62, r * 0.58); ctx.fillStyle = P.ear; ctx.fill(); } });
+  };
+  ear(13, -94, 10, shade(P.skin, -0.1));
+  // coque inférieure
+  const hull = B([[-44, -44], [-31, -35], [0, -31], [31, -35], [44, -44], [30, -49], [-30, -49]], 0.45);
+  fig(ctx, hull, P.hullD, { crack: 21, cn: 1, inside: () => { ell(ctx, 0, -32, 10, 3.5); ctx.fillStyle = P.light2; ctx.fill(); } });
+  // tête de souris dans la bulle
+  ctx.save(); ctx.translate(0, -6);
+  fig(ctx, E(-1, -60, 19.5, 17.5), P.skin, {
+    rim: false,
+    inside: () => { ell(ctx, -12, -52, 11, 7, -0.2); ctx.fillStyle = P.skinL; ctx.fill(); },
+  });
+  const blink = a.f === 3;
+  eye(ctx, -11, -62, 6, { ry: 7.2, skin: P.skin, inner: 1, anger: 0.6, lid: 0.12, iris: P.iris, blink });
+  eye(ctx, 5, -63, 7, { ry: 8.4, skin: P.skin, inner: -1, anger: 0.6, lid: 0.12, iris: P.iris, blink });
+  brow(ctx, -19, -72, -6, -69, 4.2);
+  brow(ctx, 14, -74, 0, -70.5, 4.4);
+  blob(ctx, -21, -55, 3.8, P.ear, { rim: false, lw: 2.2 });
+  ctx.beginPath(); ctx.moveTo(-19, -49.5); ctx.quadraticCurveTo(-10, -46.5, -2, -49.5); stroke(ctx, 2.4);
+  fang(ctx, -14, -48.4, 3.6, 3); fang(ctx, -6, -48.2, 3.6, 3);
+  // bulle de verre
+  const dome = E(0, -61, 25, 24);
+  dome(ctx); ctx.fillStyle = rgba(P.glass, 0.16); ctx.fill();
+  clip(ctx, dome, () => {
+    ctx.beginPath(); ctx.arc(0, -61, 21, Math.PI * 1.05, Math.PI * 1.42); stroke(ctx, 3.4, 'rgba(255,255,255,0.8)');
+    rimLight(ctx, dome, rgba(RIM, 0.9), 1.8, 3);
+  });
+  dome(ctx); stroke(ctx, 3);
+  ear(-14, -86, 11, P.skin);
+  for (const [x, y] of [[-14, -80], [13, -82]]) { ell(ctx, x, y, 7, 2.6); paint(ctx, P.band, 2.2); }
+  // antenne
+  limb(ctx, [[0, -84], [1 + a.s, -94], [3 + a.s * 2, -100]], 2.8, 2.2, P.hullD, { rim: false, lw: 2 });
+  glow(ctx, 3 + a.s * 2, -102, 9, P.ray, 0.8); blob(ctx, 3 + a.s * 2, -102, 3.2, P.ray, { lw: 2, rim: false });
+  ctx.restore();
+  // anneau à lumières
+  const ring = B([[-47, -46], [-40, -52], [0, -55], [40, -52], [47, -46], [40, -40], [0, -38], [-40, -40]], 0.45);
+  fig(ctx, ring, P.hull, {
+    inside: () => {
+      ctx.fillStyle = P.band; ctx.fillRect(-50, -47, 100, 7);
+      for (let i = 0; i < 7; i++) {
+        const x = -36 + i * 12, on = (i + a.f) % 3 === 0;
+        const c = i % 2 ? P.light1 : P.light2;
+        if (on) glow(ctx, x, -43.5, 9, c, 0.9);
+        ell(ctx, x, -43.5, 3, 2.6); ctx.fillStyle = on ? mix(c, '#ffffff', 0.5) : shade(c, -0.35); ctx.fill(); stroke(ctx, 1.4);
+      }
+    },
+  });
+  if (V === 1) for (const x of [-30, -15, 15, 30]) spike(ctx, x, -51 - (1 - Math.abs(x) / 40) * 3, -Math.PI / 2 + x * 0.012, 8, 5, P.gold);
+  // canon à rayons
+  ctx.save(); ctx.translate(-40, -42);
+  fig(ctx, RR(-14, -4.5, 18, 9, 3), P.hullD, { rim: false, lw: 2.6, glint: false });
+  fig(ctx, RR(-20, -3, 8, 6, 2), P.band, { rim: false, lw: 2.2, glint: false });
+  glow(ctx, -21, 0, 12, P.ray, a.f % 2 ? 0.95 : 0.6);
+  blob(ctx, -21, 0, 3, mix(P.ray, '#ffffff', 0.4), { lw: 1.8, rim: false });
+  ctx.restore();
+  if (V === 3) { flame(ctx, 38, -50, 6, a.ph, 0.4); flame(ctx, -28, -50, 5, a.ph + 2, -0.3); }
+  if (V === 2) { drip(ctx, -20, -36, 6, a.ph); drip(ctx, 22, -36, 8, a.ph + 2); }
+  ctx.restore();
+  motes(ctx, a, 12, -46, -110, 92, 80);
+}
+
+// =====================================================================
+//  13. Fantôme drap — cambrioleur : masque de bandit, bonnet, pied-de-biche, sac de croquettes volées
+// =====================================================================
+const GHOST = {
+  rim: '#7affd8',
+  sheet: ['#eef0ff', 'b'], sheetS: ['#c9c6ec', 'b'], mask: ['#2a2238', 'k'], hat: ['#3a3458', 'c'], hatB: ['#ff4a6a', 'a'],
+  sack: ['#d8b27a', 'c'], bar: ['#e8334a', 'a'], iris: ['#2f7a6a', 'e'], fish: ['#4aa9ff', 'k'],
+};
+function drawGhost(ctx, a, P) {
+  ctx.save();
+  ctx.translate(0, a.hov * 0.8 - 6);
+  const wv = (i) => Math.sin(a.ph + i * 1.3) * 3;
+  // sac de croquettes sur l'épaule
+  ctx.save(); ctx.translate(26, -64); ctx.rotate(0.2 + a.s * 0.05);
+  const sack = B([[-12, -2], [-14, -14], [-6, -22], [8, -22], [16, -12], [14, 4], [2, 8], [-10, 6]]);
+  fig(ctx, sack, P.sack, {
+    inside: () => {
+      ctx.save(); ctx.translate(1, -7); ctx.fillStyle = P.fish;
+      ell(ctx, 0, 0, 6, 3.6); ctx.fill(); poly(ctx, [[5, 0], [10, -4], [10, 4]]); ctx.fill();
+      ell(ctx, -3, -0.8, 0.9, 0.9); ctx.fillStyle = '#ffffff'; ctx.fill();
+      ctx.restore();
+      ctx.beginPath(); ctx.moveTo(-8, 2); ctx.lineTo(-4, 4); ctx.moveTo(6, -18); ctx.lineTo(9, -14); stroke(ctx, 1.6, rgba(OUT, 0.5));
+    },
+  });
+  fig(ctx, B([[-6, -21], [-2, -30], [6, -31], [8, -22]]), shade(P.sack, -0.1), { rim: false, lw: 2.4, glint: false });
+  limb(ctx, [[-7, -22], [9, -22]], 3.6, 3.6, P.hatB, { rim: false, lw: 2 });
+  ctx.restore();
+  // drap
+  const sheet = B([[-27, -60], [-25, -83], [-12, -99], [6, -101], [21, -89], [27, -66], [29, -38], [31, -20 + wv(0)], [23, -15 + wv(1)], [15, -22 + wv(1)], [7, -13 + wv(2)], [-2, -20 + wv(2)], [-10, -12 + wv(3)], [-18, -19 + wv(3)], [-27, -13 + wv(4)], [-29, -30]], 0.5);
+  fig(ctx, sheet, P.sheet, {
+    crack: 22, cn: 2,
+    inside: () => {
+      ctx.strokeStyle = rgba(P.sheetS, 0.9); ctx.lineWidth = 3;
+      for (const x of [-8, 10]) { ctx.beginPath(); ctx.moveTo(x, -50); ctx.quadraticCurveTo(x + 3, -32, x - 1, -16); ctx.stroke(); }
+      // masque de bandit
+      fig(ctx, RR(-34, -79, 70, 15, 6), P.mask, { rim: false, lw: 2.4, glint: false, hi: 0.1 });
+    },
+  });
+  // nœud du masque
+  limb(ctx, [[25, -72], [33, -74 + wv(1) * 0.6], [40, -70 + wv(2)]], 5, 3, P.mask, { rim: false, lw: 2.2 });
+  limb(ctx, [[25, -70], [32, -64 + wv(2) * 0.6], [37, -60 + wv(3)]], 5, 3, P.mask, { rim: false, lw: 2.2 });
+  // bonnet de cambrioleur
+  ctx.save(); ctx.translate(-2, -95); ctx.rotate(0.08);
+  const hat = B([[-17, 5], [-16, -5], [-8, -12], [4, -13], [14, -7], [18, 5]]);
+  fig(ctx, hat, P.hat, { lw: 2.8, size: 13, inside: () => { ctx.strokeStyle = shade(P.hat, 0.2); ctx.lineWidth = 1.6; for (let x = -14; x < 18; x += 4.5) { ctx.beginPath(); ctx.moveTo(x, -12); ctx.lineTo(x, 4); ctx.stroke(); } } });
+  fig(ctx, RR(-19, 1, 39, 7, 3.4), P.hatB, { rim: false, lw: 2.6, glint: false });
+  if (V === 3) flame(ctx, 2, -12, 7, a.ph);
+  ctx.restore();
+  // yeux dans le masque
+  const blink = a.f === 3;
+  eye(ctx, -17, -71.5, 5.8, { ry: 6.4, skin: P.mask, inner: 1, anger: 0.55, lid: 0.12, iris: P.iris, blink });
+  eye(ctx, 1, -72.5, 6.8, { ry: 7.4, skin: P.mask, inner: -1, anger: 0.55, lid: 0.12, iris: P.iris, blink });
+  // sourire narquois
+  const m = B([[-22, -56], [-12, -53], [2, -54], [8, -58], [5, -49], [-8, -46], [-18, -50]]);
+  fig(ctx, m, '#4a1a3a', { rim: false, lw: 2.6, glint: false, hi: 0, inside: () => { ell(ctx, -6, -46, 8, 4); ctx.fillStyle = '#ff6d8a'; ctx.fill(); } });
+  fang(ctx, -17, -54.5, 4.4, 3.6); fang(ctx, 2, -55.4, 4.4, 3.6);
+  blush(ctx, -26, -60, 3.6, 2.2); blush(ctx, 12, -60, 4, 2.4);
+  if (V === 1) { pauldron(ctx, 18, -82, 8, 0.5); pauldron(ctx, -22, -82, 7, -0.5); }
+  if (V === 2) { drip(ctx, -10, -14 + wv(3), 7, a.ph); drip(ctx, 14, -18 + wv(1), 6, a.ph + 2); }
+  // bras-drap avant + pied-de-biche
+  ctx.save(); ctx.translate(-30, -40); ctx.rotate(-0.4 + a.s * 0.12);
+  fig(ctx, B([[-2.6, 8], [2.6, 8], [2.6, -24], [-2, -30], [-9, -29], [-10, -25], [-5, -25], [-2.6, -22]], 0.2), P.bar, { rim: false, lw: 2.4, glint: false, hi: 0.3, size: 9 });
+  ctx.restore();
+  limb(ctx, [[-20, -44], [-28, -40], [-33, -42 + a.s]], 11, 9, P.sheet, { lw: 2.8 });
+  blob(ctx, -32, -40 + a.s, 6, P.sheet, { rim: false });
+  ctx.restore();
+  motes(ctx, a, 13, -36, -110, 80, 90);
+}
+
+// =====================================================================
+//  14. Rat chevalier — chevalier noir du gang : heaume à visière, plumet, bouclier « patte barrée »
+// =====================================================================
+const KNIGHT = {
+  rim: '#ff4a5a',
+  fur: ['#9a8fb4', 'b'], light: ['#ddd6ee', 'b'], skin: ['#ff9ec0', 'd'], nose: ['#ff5f93', 'd'],
+  steel: ['#c8d0ea', 'm'], steelD: ['#7d88b0', 'm'], trim: ['#ffc83a', 'm'], plume: ['#ff3d5a', 'a'],
+  tabard: ['#c8263c', 'a'], shield: ['#3b5fd0', 'c'], badge: ['#fff3d6', 'k'], leather: ['#5a3a3a', 'c'], iris: ['#46307a', 'e'],
+};
+function drawKnightRat(ctx, a, P) {
+  const st = a.step;
+  // queue
+  const tw = a.s * 3;
+  limb(ctx, [[12, -18], [28, -12], [40, -20], [44 + tw * 0.3, -34], [37 + tw, -43]], 6, 2.4, P.skin);
+  // jambes en armure
+  const bx = 8 - st * 3.5, by = a.lift === -1 ? -3.5 : 0;
+  const fx = -7 + st * 3.5, fy = a.lift === 1 ? -3.5 : 0;
+  const boot = (x, y, c) => fig(ctx, B([[x - 9, y], [x - 9, y - 6], [x - 2, y - 9], [x + 6, y - 8], [x + 7, y - 1], [x + 3, y + 0.4]]), c, { rim: false, glint: false });
+  limb(ctx, [[6, -18], [bx + 1, by - 6]], 9, 8, P.steelD);
+  boot(bx, by, shade(P.steelD, -0.15));
+  limb(ctx, [[-5, -18], [fx + 1, fy - 6]], 9, 8, P.steel);
+  boot(fx, fy, P.steelD);
+  ctx.save();
+  ctx.translate(0, -a.up * 1.3);
+  squash(ctx, a);
+  // épée levée (bras arrière)
+  ctx.save(); ctx.translate(18, -46); ctx.rotate(0.35 + a.s * 0.08);
+  fig(ctx, B([[-3.4, -6], [3.4, -6], [3.4, -40], [0, -47], [-3.4, -40]], 0.1), P.steel, { rim: false, lw: 2.6, hi: 0.35, size: 10, inside: () => { ctx.fillStyle = shade(P.steel, -0.3); ctx.fillRect(0, -40, 3.4, 34); } });
+  fig(ctx, RR(-9, -8, 18, 5, 2.4), P.trim, { rim: false, lw: 2.4, glint: false });
+  fig(ctx, RR(-2.4, -3, 4.8, 9, 2), P.leather, { rim: false, lw: 2, glint: false });
+  blob(ctx, 0, 7.5, 3, P.trim, { lw: 2, rim: false, glint: false });
+  ctx.restore();
+  blob(ctx, 18, -45, 5.4, P.steelD, { rim: false });
+  // corps : cuirasse + tabard
+  const body = B([[-16, -38], [-7, -48], [10, -48], [20, -34], [18, -14], [4, -8], [-12, -11], [-19, -24]]);
+  fig(ctx, body, P.steel, {
+    crack: 23, cn: 2,
+    inside: () => {
+      fig(ctx, B([[-8, -40], [10, -40], [12, -8], [1, -2], [-9, -8]], 0.3), P.tabard, { rim: false, lw: 2.4 });
+      ctx.fillStyle = P.leather; ctx.fillRect(-24, -24, 48, 5);
+      fig(ctx, RR(-2, -25.5, 8, 8, 1.6), P.trim, { rim: false, lw: 1.8, glint: false });
+    },
+  });
+  if (V === 1) { pauldron(ctx, 12, -44, 9, 0.5); }
+  ctx.restore();
+  // ----- tête
+  ctx.save();
+  ctx.translate(0, -a.up * 2.3);
+  squash(ctx, a, 0.5);
+  // oreille (dépasse du heaume)
+  fig(ctx, E(17, -76, 9, 8.6), shade(P.fur, -0.06), { inside: () => { ell(ctx, 17.5, -75, 5.6, 5); ctx.fillStyle = P.skin; ctx.fill(); } });
+  const head = B([[-36, -58], [-30, -66], [-18, -72], [-2, -74], [11, -68], [14, -57], [9, -46], [-2, -42], [-16, -43], [-29, -49]]);
+  fig(ctx, head, P.fur, { inside: () => { ell(ctx, -26, -51, 12, 7, -0.15); ctx.fillStyle = P.light; ctx.fill(); } });
+  // plumet
+  const pl = a.s * 2;
+  limb(ctx, [[0, -86], [8, -97], [20, -101 + pl], [31, -95 + pl * 1.4]], 8, 3.6, P.plume, { lw: 2.6 });
+  limb(ctx, [[2, -88], [10, -96], [20, -96 + pl]], 3.4, 1.6, shade(P.plume, 0.35), { lw: 0, rim: false });
+  // heaume
+  const helm = B([[-24, -64], [-20, -78], [-6, -87], [9, -84], [17, -71], [16, -56], [8, -54], [8, -63], [-6, -67], [-17, -62]]);
+  fig(ctx, helm, P.steel, {
+    crack: 24, cn: 1, size: 18,
+    inside: () => { ctx.beginPath(); ctx.moveTo(-1, -88); ctx.lineTo(-2, -67); stroke(ctx, 3.2, P.trim); },
+  });
+  // visière relevée
+  ctx.save(); ctx.translate(-6, -76); ctx.rotate(-0.22);
+  fig(ctx, B([[-20, 2], [-16, -5], [6, -7], [14, -3], [12, 3], [-4, 4]], 0.3), P.steelD, { rim: false, lw: 2.6, glint: false, inside: () => { ctx.fillStyle = OUT; ctx.fillRect(-12, -2.4, 18, 2.2); } });
+  ctx.restore();
+  for (const [x, y] of [[13, -62], [14, -72]]) { ell(ctx, x, y, 1.5, 1.5); ctx.fillStyle = shade(P.steel, -0.4); ctx.fill(); }
+  if (V === 1) for (const x of [-12, -3, 6]) spike(ctx, x, -84 + Math.abs(x + 3) * 0.35, -Math.PI / 2 + (x + 3) * 0.04, 8, 5, P.gold);
+  if (V === 3) { flame(ctx, -14, -82, 6, a.ph, -0.2); }
+  // yeux + sourcils
+  const blink = a.f === 3;
+  eye(ctx, -20.5, -58, 5.2, { ry: 6.4, skin: P.fur, inner: 1, anger: 0.6, lid: 0.12, iris: P.iris, blink });
+  eye(ctx, -6.5, -59, 6.4, { ry: 7.6, skin: P.fur, inner: -1, anger: 0.6, lid: 0.12, iris: P.iris, blink });
+  brow(ctx, -27, -66, -16, -62.5, 4.2);
+  brow(ctx, 2, -68, -10, -64.5, 4.6);
   // museau
-  whiskers(ctx, -29, -50, -1, 12, 0.55);
-  ell(ctx, -35.5, -55, 4.2, 3.8); paint(ctx, ball(ctx, -35.5, -56, 4.5, '#ff6f96'), 2.2);
-  gloss(ctx, -36.6, -56.4, 1.4, 1, 0.8);
-  rr(ctx, -30.5, -48.8, 3.4, 5.2, 1); paint(ctx, '#fffbea', 1.8);
-  rr(ctx, -27.1, -48.5, 3.4, 5, 1); paint(ctx, '#fffbea', 1.8);
-  ctx.beginPath(); ctx.moveTo(-32, -49); ctx.quadraticCurveTo(-24, -47, -18, -49); ctx.lineWidth = 2; ctx.strokeStyle = OUT; ctx.stroke();
-  blush(ctx, -8, -46, 4.4, 2.4);
+  blob(ctx, -36, -56.5, 4.4, P.nose, { ry: 4, rim: false, lw: 2.4 });
+  for (const x of [-31, -27.2]) { rr(ctx, x - 1.8, -50.8, 3.6, 5.6, 1.2); paint(ctx, WHITE, 1.8); }
+  ctx.beginPath(); ctx.moveTo(-33, -50.5); ctx.quadraticCurveTo(-24, -47, -16, -50); stroke(ctx, 2.6);
+  fang(ctx, -18, -49.6, 3.8, 3);
+  blush(ctx, -10, -50, 4, 2.4);
+  if (V === 2) drip(ctx, -16, -47, 6, a.ph);
   ctx.restore();
   // bouclier (bras avant)
-  ctx.save(); ctx.translate(0, b);
-  const sx = -17, sy = -30 - s * 0.5;
-  const shield = () => smooth(ctx, [[sx - 12, sy - 14], [sx, sy - 16], [sx + 12, sy - 14], [sx + 11, sy + 2], [sx, sy + 15], [sx - 11, sy + 2]]);
-  form(ctx, shield, '#3b6fe0', sx, sy, 16, { light: 0.4 });
-  clipTo(ctx, shield, () => {
-    shield(); ctx.lineWidth = 6; ctx.strokeStyle = gold; ctx.stroke();
-    // fromage
-    poly(ctx, [[sx - 7, sy + 4], [sx + 7, sy + 4], [sx + 7, sy - 3], [sx - 7, sy + 1]]);
-    paint(ctx, '#ffd84a', 1.6);
-    poly(ctx, [[sx - 7, sy + 1], [sx + 7, sy - 3], [sx + 2, sy - 7]]); paint(ctx, '#ffe98a', 1.6);
-    ctx.fillStyle = '#e8a91c';
-    ell(ctx, sx - 1, sy + 1.5, 1.3, 1.1); ctx.fill(); ell(ctx, sx + 4, sy + 0.5, 1, 0.9); ctx.fill();
+  ctx.save(); ctx.translate(0, -a.up * 1.3);
+  const sx = -22, sy = -23 - a.up;
+  const shield = B([[sx - 13, sy - 15], [sx, sy - 18], [sx + 13, sy - 15], [sx + 12, sy + 2], [sx, sy + 17], [sx - 12, sy + 2]], 0.35);
+  fig(ctx, shield, P.shield, {
+    crack: 25, cn: 1,
+    inside: () => { shield(ctx); ctx.lineWidth = 7; ctx.strokeStyle = P.trim; ctx.stroke(); },
   });
-  shield(); paint(ctx, null, LW);
-  gloss(ctx, sx - 6, sy - 9, 3, 2, 0.55);
+  gangBadge(ctx, sx, sy - 1, 7, P.badge, OUT);
   ctx.restore();
+  motes(ctx, a, 14, -36, -104, 76, 96);
 }
 
-// ------------------------------------------------------------ registre
-// box : [x0, y0, w, h] en unités locales AVANT mise à l'échelle (contour, glows et marges inclus)
-// k   : échelle appliquée au dessin pour respecter les tailles relatives
+// #####################################################################
+//  BOSS — designs uniques, 150 à 220 unités de haut
+// #####################################################################
+const BLW = 3.6; // contour des grandes formes de boss
+
+// Couronne dorée à pointes et gemmes (repère : base centrée en 0,0)
+function crown(ctx, w, h, P, gems = ['#ff2a48', '#3fa9ff', '#3fe08a']) {
+  const pts = [[-w / 2, 0], [-w / 2 - 2, -h], [-w / 4, -h * 0.45], [0, -h * 1.15], [w / 4, -h * 0.45], [w / 2 + 2, -h], [w / 2, 0]];
+  fig(ctx, PL(pts), P.gold, { lw: 3, size: w * 0.4, cx: 0, cy: -h / 2, rim: false, hi: 0.3 });
+  fig(ctx, RR(-w / 2 - 1, -h * 0.28, w + 2, h * 0.32, 2), shade(P.gold, -0.08), { lw: 2.6, rim: false, glint: false });
+  for (const [x, y, i] of [[-w / 2 - 2, -h, 0], [0, -h * 1.15, 1], [w / 2 + 2, -h, 2]]) blob(ctx, x, y, 3.4, gems[i % gems.length], { lw: 2, rim: false, hi: 0.4 });
+  for (const [x, i] of [[-w * 0.28, 1], [0, 0], [w * 0.28, 2]]) blob(ctx, x, -h * 0.12, 2.8, gems[i], { lw: 1.8, rim: false, hi: 0.4 });
+}
+// Bordure d'hermine (blanc à mouchetures) le long d'une courbe
+function ermine(ctx, pts, w, base) {
+  limb(ctx, pts, w, w, base, { rim: false });
+  for (let i = 1; i < 7; i++) {
+    const p = along(pts, i / 7);
+    ctx.fillStyle = OUT;
+    poly(ctx, [[p.x - 1.4, p.y - 2.6], [p.x + 1.4, p.y - 2.6], [p.x, p.y + 3]]); ctx.fill();
+  }
+}
+
+// =====================================================================
+//  B1. Roi des Rats — gros roi : couronne, cape royale d'hermine, sceptre-fromage en or, dents en or
+// =====================================================================
+const RATKING = {
+  rim: '#ffcf3a',
+  fur: ['#8f84a8', 'b'], light: ['#d8d0ea', 'b'], skin: ['#ff9ec0', 'd'], nose: ['#ff5f93', 'd'],
+  cape: ['#c8263c', 'c'], capeIn: ['#7a1430', 'c'], tunic: ['#5b3ab8', 'c'], belt: ['#3a2638', 'c'], fur2: ['#fff6ee', 'k'],
+  gold2: ['#ffc83a', 'm'], iris: ['#c2187a', 'e'],
+};
+function drawRatKing(ctx, a, P) {
+  const st = a.step;
+  // queue
+  const tw = a.s * 5;
+  limb(ctx, [[30, -26], [56, -20], [76, -40], [80 + tw * 0.3, -76], [70 + tw, -100], [58 + tw, -104]], 12, 4.5, P.skin, { lw: BLW });
+  // cape
+  const sw = a.s * 3;
+  const cape = B([[-24, -122], [12, -128], [46, -114], [64 + sw * 0.5, -72], [76 + sw, -24], [74 + sw, -3], [36, -5], [2, -8], [-12, -60]], 0.45);
+  fig(ctx, cape, P.cape, { lw: BLW, crack: 30, inside: () => { ctx.fillStyle = P.capeIn; poly(ctx, [[20, -120], [60, -110], [80, -20], [80, 0], [50, 0]]); ctx.fill(); } });
+  ermine(ctx, [[48, -112], [64 + sw * 0.5, -72], [74 + sw, -30], [76 + sw, -6]], 11, P.fur2);
+  // pieds
+  const bx = 18 - st * 4, fx = -22 + st * 4;
+  const foot = (x, y, c) => {
+    fig(ctx, B([[x - 15, y], [x - 15, y - 7], [x - 5, y - 12], [x + 8, y - 11], [x + 11, y - 2], [x + 5, y + 0.5]]), c, { rim: false, lw: 3.2 });
+    for (const dx of [-15, -10.5, -6]) { poly(ctx, [[x + dx, y - 2.5], [x + dx + 3.4, y - 2.5], [x + dx - 1.6, y + 1.5]]); paint(ctx, WHITE, 1.6); }
+  };
+  foot(bx, a.lift === -1 ? -5 : 0, shade(P.skin, -0.15));
+  foot(fx, a.lift === 1 ? -5 : 0, P.skin);
+  ctx.save();
+  ctx.translate(0, -a.up * 2);
+  squash(ctx, a, 1.2);
+  ctx.scale(1.04, 0.86);
+  // ventre royal
+  const body = B([[-46, -58], [-42, -92], [-26, -112], [4, -118], [32, -108], [46, -80], [48, -40], [36, -12], [4, -6], [-30, -10], [-46, -30]]);
+  fig(ctx, body, P.fur, {
+    lw: BLW, crack: 31,
+    inside: () => {
+      ell(ctx, -14, -50, 28, 34); ctx.fillStyle = P.light; ctx.fill();
+      fig(ctx, B([[4, -116], [40, -110], [54, -60], [50, -8], [10, -4], [16, -60]], 0.4), P.tunic, { rim: false, lw: 3 });
+      for (const y of [-92, -72, -52, -32]) blob(ctx, 14 + (y + 92) * 0.02, y, 3.4, P.gold2, { lw: 2, rim: false, glint: false });
+      fig(ctx, RR(-56, -40, 112, 12, 3), P.belt, { rim: false, lw: 3, glint: false });
+      fig(ctx, RR(-20, -43, 18, 18, 4), P.gold2, { rim: false, lw: 3, hi: 0.3, inside: () => { ell(ctx, -11, -34, 4, 4); ctx.fillStyle = shade(P.gold2, -0.4); ctx.fill(); } });
+    },
+  });
+  // col d'hermine
+  ermine(ctx, [[-36, -106], [-10, -118], [16, -120], [40, -110]], 15, P.fur2);
+  // main posée sur la bedaine
+  blob(ctx, 30, -66, 10, shade(P.skin, -0.06), { lw: 3.2, inside: () => { ctx.beginPath(); for (const dy of [-3, 3]) { ctx.moveTo(22, -66 + dy); ctx.lineTo(28, -66 + dy); } stroke(ctx, 2); } });
+  fig(ctx, RR(22, -64, 6, 4.6, 1.6), P.gold2, { rim: false, lw: 2, glint: false });
+  if (V === 1) { pauldron(ctx, 34, -112, 14, 0.5); pauldron(ctx, -32, -108, 13, -0.5); }
+  ctx.restore();
+  // ----- tête
+  ctx.save();
+  ctx.translate(0, -a.up * 3 + 16);
+  squash(ctx, a, 0.6);
+  ctx.translate(-20, -104); ctx.scale(1.2, 1.2); ctx.translate(20, 104);
+  const ear = (x, y, r, c) => fig(ctx, B([[x - r, y], [x - r * 0.7, y - r * 0.72], [x, y - r], [x + r * 0.7, y - r * 0.72], [x + r, y], [x + r * 0.55, y + r * 0.2], [x + r * 0.35, y - r * 0.2], [x + r * 0.1, y + r * 0.35], [x - r * 0.7, y + r * 0.72]], 0.4), c, {
+    lw: BLW, inside: () => { ell(ctx, x + r * 0.05, y + r * 0.1, r * 0.62, r * 0.58); ctx.fillStyle = P.skin; ctx.fill(); },
+  });
+  ear(20, -154, 18, shade(P.fur, -0.1));
+  ear(-4, -160, 20, P.fur);
+  const head = B([[-64, -128], [-57, -141], [-40, -152], [-16, -158], [8, -154], [22, -140], [22, -120], [10, -106], [-14, -102], [-40, -105], [-57, -115]]);
+  fig(ctx, head, P.fur, { lw: BLW, crack: 32, cn: 2, inside: () => { ell(ctx, -46, -114, 20, 11, -0.15); ctx.fillStyle = P.light; ctx.fill(); } });
+  // couronne
+  ctx.save(); ctx.translate(-12, -155); ctx.rotate(-0.12 + a.s * 0.03);
+  crown(ctx, 38, 22, P);
+  if (V === 3) { flame(ctx, -12, -22, 7, a.ph); flame(ctx, 0, -26, 9, a.ph + 2); flame(ctx, 12, -22, 7, a.ph + 4); }
+  ctx.restore();
+  // yeux cruels + monocle
+  const blink = a.f === 3;
+  eye(ctx, -39, -132, 7, { ry: 8.4, skin: P.fur, inner: 1, anger: 0.5, lid: 0.28, iris: P.iris, blink });
+  eye(ctx, -17, -134, 8.6, { ry: 10, skin: P.fur, inner: -1, anger: 0.35, lid: 0.18, iris: P.iris, blink });
+  ell(ctx, -17, -134, 11.5, 12.5); stroke(ctx, 6.5); ell(ctx, -17, -134, 11.5, 12.5); stroke(ctx, 3, P.gold2);
+  ctx.beginPath(); ctx.moveTo(-8, -124); ctx.quadraticCurveTo(0, -112, -4, -100); stroke(ctx, 2, P.gold2);
+  brow(ctx, -49, -145, -32, -140, 6);
+  brow(ctx, 0, -151, -24, -148, 6.6);
+  // museau, sourire aux dents d'or
+  blob(ctx, -65, -127, 7, P.nose, { ry: 6, rim: false, lw: 3 });
+  const m = B([[-60, -116], [-46, -112], [-30, -112], [-20, -116], [-24, -106], [-40, -101], [-54, -106]]);
+  fig(ctx, m, '#5a1030', { rim: false, lw: 3, glint: false, hi: 0, inside: () => { ell(ctx, -40, -101, 11, 5); ctx.fillStyle = '#ff6d8a'; ctx.fill(); } });
+  for (const x of [-52, -46]) { rr(ctx, x - 2.8, -117, 5.6, 8.5, 1.6); paint(ctx, P.gold, 2); }
+  fang(ctx, -27, -114.5, 6.5, 5, false, P.gold);
+  fang(ctx, -36, -104, 5, 4, true, P.gold);
+  ctx.beginPath(); for (const [y0, y1] of [[-124, -130], [-120, -120], [-116, -110]]) { ctx.moveTo(-56, y0); ctx.lineTo(-76, y1); } stroke(ctx, 2.4);
+  blush(ctx, -28, -118, 6, 3);
+  if (V === 2) drip(ctx, -24, -108, 10, a.ph);
+  ctx.restore();
+  // bras avant levé : sceptre-fromage en or pointé vers le héros
+  ctx.save(); ctx.translate(0, -a.up * 2);
+  const hx = -62, hy = -100 + a.s * 2;
+  ctx.save(); ctx.translate(hx, hy); ctx.rotate(-0.4 + a.s * 0.05);
+  fig(ctx, RR(-3.8, -66, 7.6, 92, 3), P.gold2, { rim: false, lw: 3, inside: () => { ctx.fillStyle = shade(P.gold2, -0.3); for (let y = -50; y < 24; y += 13) ctx.fillRect(-4, y, 8, 3); } });
+  blob(ctx, 0, 27, 5.5, P.gold2, { lw: 2.8, rim: false });
+  ctx.translate(0, -66);
+  glow(ctx, 0, -14, 30, V >= 2 ? EYEG : '#ffd23f', 0.5);
+  const ch = PL([[-18, -2], [18, -2], [18, -18], [-18, -8]]);
+  fig(ctx, ch, P.gold2, { lw: 3, rim: false, hi: 0.3, size: 15, inside: () => { ctx.fillStyle = shade(P.gold2, -0.3); for (const [x, y, r] of [[-9, -4.5, 2.6], [4, -6.5, 3.2], [12, -11, 2.2]]) { ell(ctx, x, y, r, r * 0.8); ctx.fill(); } } });
+  fig(ctx, PL([[-18, -8], [18, -18], [13, -25]]), shade(P.gold2, 0.25), { lw: 3, rim: false, glint: false });
+  blob(ctx, 2, -8, 5, '#ff2a48', { lw: 2.4, rim: false, hi: 0.5 });
+  ctx.restore();
+  limb(ctx, [[-30, -86], [-50, -80], [hx + 2, hy + 2]], 17, 15, P.fur, { lw: BLW });
+  blob(ctx, hx, hy, 11, P.skin, { lw: 3.2, inside: () => { ctx.beginPath(); for (const dy of [-4, 2]) { ctx.moveTo(hx - 11, hy + dy); ctx.lineTo(hx - 4, hy + dy + 0.5); } stroke(ctx, 2.2); } });
+  for (const dy of [-4, 2]) fig(ctx, RR(hx - 9, hy + dy - 2.4, 5, 4.8, 1.6), P.gold2, { rim: false, lw: 2, glint: false });
+  blob(ctx, hx - 6.5, hy - 1.5, 2.2, '#3fa9ff', { lw: 1.4, rim: false, glint: false });
+  ctx.restore();
+  motes(ctx, a, 30, -70, -190, 150, 170, 7);
+}
+
+// =====================================================================
+//  B2. Cerbère le Bouledogue — molosse à trois têtes, colliers à pics, chaînes brisées
+// =====================================================================
+const CERB = {
+  rim: '#ff5a3a',
+  fur: ['#7d80a6', 'b'], furD: ['#55587c', 'b'], light: ['#f2e4d2', 'b'], ear: ['#3e3656', 'b'], nose: ['#2a1a24', 'k'],
+  collar: ['#2a2238', 'c'], stud: ['#d9def0', 'm'], chain: ['#aab2cc', 'm'], iris: ['#e8a01a', 'e'], mouth: ['#6e1730', 'k'],
+};
+// Tête de bouledogue (repère local, centre 0,0 ; ~60 × 48) ; open : ouverture de gueule 0..1
+function bullHead(ctx, P, a, o = {}) {
+  const open = o.open ?? 0;
+  const lw = 3.2;
+  const head = B([[-34, -2], [-32, -15], [-17, -22], [4, -23], [22, -17], [30, -4], [27, 8], [11, 15], [-11, 16], [-29, 10]]);
+  fig(ctx, head, P.fur, {
+    lw, crack: o.seed ?? 40, cn: 1,
+    inside: () => { ctx.beginPath(); ctx.moveTo(-14, -20); ctx.quadraticCurveTo(-6, -23, 2, -20); stroke(ctx, 2.4, rgba(OUT, 0.45)); },
+  });
+  fig(ctx, B([[-22, -20], [-36, -21], [-43, -11], [-37, -7], [-30, -12]], 0.4), P.ear, { glint: false, rim: false, lw: 2.8 });
+  fig(ctx, B([[14, -20], [28, -21], [35, -11], [30, -7], [22, -12]], 0.4), shade(P.ear, -0.1), { glint: false, rim: false, lw: 2.8 });
+  const blink = o.blink;
+  eye(ctx, -16, -7, 5.4, { ry: 6.2, skin: P.fur, inner: 1, anger: 0.65, lid: 0.2, iris: P.iris, blink });
+  eye(ctx, 2, -8, 6.4, { ry: 7.2, skin: P.fur, inner: -1, anger: 0.65, lid: 0.2, iris: P.iris, blink });
+  brow(ctx, -24, -16, -9, -11.5, 6);
+  brow(ctx, 12, -18, -4, -12.5, 6.4);
+  // mâchoire
+  ctx.save(); ctx.translate(-10, 10); ctx.rotate(open * 0.35);
+  const jaw = B([[-22, 0], [-8, 1], [10, 0], [14, -2], [12, 8], [-6, 13], [-20, 9]]);
+  fig(ctx, jaw, P.light, { rim: false, lw, glint: false, inside: () => { ctx.fillStyle = P.mouth; ctx.fillRect(-26, -6, 44, 7 + open * 2); } });
+  for (let i = 0; i < 5; i++) { rr(ctx, -18 + i * 6, -0.5, 4.6, 4, 1); paint(ctx, WHITE, 1.4); }
+  fang(ctx, -21, 1, 9, 5.2, true); fang(ctx, 12, 0.5, 8.5, 5, true);
+  ctx.restore();
+  if (open > 0.3) { ell(ctx, -12, 9, 13, 3 + open * 4); ctx.fillStyle = '#ff6d8a'; ctx.fill(); }
+  // bajoues + truffe
+  fig(ctx, E(-20, 3, 13, 9), P.light, { rim: false, lw, glint: false });
+  fig(ctx, E(1, 3, 12, 8.6), shade(P.light, -0.06), { rim: false, lw, glint: false });
+  blob(ctx, -10, -2.5, 8, P.nose, { ry: 5.4, rim: false, lw: 2.6 });
+  if (V === 2) drip(ctx, -10, 18, 9, a.ph + (o.seed || 0));
+  if (V === 3) { flame(ctx, -8, -22, 6.5, a.ph + (o.seed || 0)); flame(ctx, 6, -23, 5.5, a.ph + 2 + (o.seed || 0), 0.2); }
+  if (V === 1) for (const x of [-12, -2, 8]) spike(ctx, x, -22.5 + Math.abs(x + 2) * 0.1, -Math.PI / 2 + (x + 2) * 0.04, 9, 5.6, P.gold);
+}
+// Collier à pics + chaîne pendante (repère : centre du collier)
+function spikedCollar(ctx, P, a, x, y, w, rot, chainLen) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+  // chaîne
+  if (chainLen) {
+    const sw = a.s * 3;
+    for (let i = 0; i < chainLen; i++) {
+      const t = i / chainLen;
+      blob(ctx, -4 + sw * t * t, 6 + i * 7, 3.4, P.chain, { ry: 4.6, rot: (i % 2) * 1.2, rim: false, lw: 2.2, glint: false, hi: 0.3 });
+    }
+  }
+  fig(ctx, RR(-w / 2, -5, w, 10, 4), P.collar, { rim: false, lw: 3, glint: false });
+  for (let i = 0; i < 4; i++) spike(ctx, -w / 2 + w * (i + 0.5) / 4, 4, Math.PI / 2 + (i - 1.5) * 0.15, 8, 5.4, P.stud, 2);
+  ctx.restore();
+}
+function drawCerberus(ctx, a, P) {
+  const st = a.step;
+  const leg = (x, top, sw, col, front) => {
+    const fx = x + sw * 6, lift = (front ? a.lift === 1 : a.lift === -1) ? -5 : 0;
+    limb(ctx, [[x, top], [x - 3 + sw * 3, top + 22], [fx, -9 + lift]], 28, 20, col, { lw: BLW, rim: front ? undefined : false });
+    fig(ctx, B([[fx - 15, lift], [fx - 15, lift - 9], [fx - 5, lift - 14], [fx + 9, lift - 12], [fx + 11, lift - 2], [fx + 5, lift + 0.5]]), front ? P.light : shade(P.light, -0.2), { rim: false, lw: 3.2 });
+    for (const dx of [-15, -10.5, -6]) { poly(ctx, [[fx + dx, lift - 2.5], [fx + dx + 3.4, lift - 2.5], [fx + dx - 1.6, lift + 1.6]]); paint(ctx, WHITE, 1.4); }
+  };
+  leg(56, -52, -st, P.furD, false);
+  leg(-4, -52, st, P.furD, false);
+  ctx.save();
+  ctx.translate(0, -a.up * 2);
+  squash(ctx, a, 0.8);
+  // queue
+  limb(ctx, [[70, -76], [80, -90], [78 + a.s * 3, -102]], 11, 7, P.fur, { lw: BLW });
+  // corps massif + harnais à pics
+  const body = B([[-32, -58], [-24, -92], [4, -106], [44, -100], [72, -86], [80, -60], [70, -38], [40, -30], [4, -32], [-24, -40]]);
+  fig(ctx, body, P.fur, {
+    lw: BLW, crack: 41,
+    inside: () => {
+      ell(ctx, -8, -44, 26, 14); ctx.fillStyle = P.light; ctx.fill();
+      ctx.fillStyle = rgba(P.furD, 0.6); for (const [x, y] of [[30, -90], [48, -84], [60, -70], [40, -66]]) { ell(ctx, x, y, 7, 3, 0.9); ctx.fill(); }
+      fig(ctx, B([[18, -110], [31, -110], [27, -24], [14, -24]], 0.2), P.collar, { rim: false, lw: 3, glint: false });
+    },
+  });
+  for (const t of [0.15, 0.4, 0.65, 0.9]) { const p = along([[8, -106], [42, -102], [72, -88]], t); spike(ctx, p.x, p.y + 2, -Math.PI / 2 + (t - 0.5) * 0.5, 13, 8, V === 1 ? P.gold : P.stud); }
+  if (V === 1) pauldron(ctx, 44, -92, 15, 0.3);
+  ctx.restore();
+  leg(48, -48, st * 0.8, P.fur, true);
+  leg(-12, -48, -st * 0.8, P.fur, true);
+  // trois têtes (de l'arrière vers l'avant)
+  const hb = (k) => -a.up * 2.5 + Math.sin(a.ph + k) * 1.5;
+  const blink = a.f === 3;
+  ctx.save(); ctx.translate(0, -a.up * 2);
+  limb(ctx, [[-2, -88], [8, -112], [16, -128 + hb(2)]], 32, 28, shade(P.fur, -0.1), { lw: BLW, rim: false });
+  limb(ctx, [[-14, -80], [-26, -98], [-32, -108 + hb(1)]], 34, 30, shade(P.fur, -0.04), { lw: BLW, rim: false });
+  limb(ctx, [[-20, -66], [-44, -66], [-58, -64 + hb(0)]], 34, 30, P.fur, { lw: BLW });
+  ctx.restore();
+  // tête arrière (aboie vers le ciel)
+  ctx.save(); ctx.translate(18, -142 + hb(2) - a.up * 2); ctx.rotate(0.3); ctx.scale(1.02, 1.02);
+  bullHead(ctx, P, a, { open: a.f % 2 ? 1 : 0.6, seed: 2 });
+  ctx.restore();
+  spikedCollar(ctx, P, a, 14, -114 + hb(2) - a.up * 2, 36, 0.5, 0);
+  // tête centrale (la plus grosse)
+  ctx.save(); ctx.translate(-30, -122 + hb(1) - a.up * 2); ctx.scale(1.22, 1.22);
+  bullHead(ctx, P, a, { open: 0, seed: 1, blink });
+  ctx.restore();
+  spikedCollar(ctx, P, a, -26, -92 + hb(1) - a.up * 2, 40, 0.3, 5);
+  // tête avant (grogne gueule ouverte)
+  ctx.save(); ctx.translate(-74, -74 + hb(0) - a.up * 2); ctx.rotate(-0.12); ctx.scale(1.1, 1.1);
+  bullHead(ctx, P, a, { open: a.f % 2 ? 0.5 : 0.9, seed: 3 });
+  ctx.restore();
+  spikedCollar(ctx, P, a, -50, -50 + hb(0) - a.up * 2, 34, -0.9, 5);
+  motes(ctx, a, 31, -100, -180, 180, 170, 7);
+}
+
+// =====================================================================
+//  B3. Crabe Titan — crabe géant portant une forteresse de sable, pinces colossales
+// =====================================================================
+const CTITAN = {
+  rim: '#5ad8ff',
+  red: ['#e8503c', 'b'], redD: ['#a82a2c', 'b'], belly: ['#ffd2a8', 'b'],
+  sand: ['#f2d08a', 'c'], sandD: ['#c89a5a', 'c'], door: ['#5a3a2e', 'k'], flag: ['#ff2f4a', 'a'], pole: ['#7a4a2e', 'k'],
+  shell: ['#ff9ec0', 'd'], weed: ['#3fb46a', 'k'], cannon: ['#3a3450', 'm'], iris: ['#3d2a66', 'e'],
+};
+function drawCrabTitan(ctx, a, P) {
+  const s = a.step;
+  // pattes
+  for (const side of [1, -1]) {
+    for (let i = 0; i < 4; i++) {
+      const up = ((i + (side > 0 ? 1 : 0)) % 2 ? s : -s) * 4;
+      const x0 = side * (24 + i * 10), y0 = -30 + i * 3;
+      const kx = side * (54 + i * 9), ky = -48 + i * 5 - up;
+      const tx = side * (60 + i * 10), ty = -2 - Math.max(0, up);
+      limb(ctx, [[x0, y0], [kx, ky], [tx, ty]], 13, 5, side > 0 ? P.redD : shade(P.red, -0.05), { lw: 3.2, rim: side > 0 ? false : undefined });
+    }
+  }
+  ctx.save();
+  ctx.translate(0, -[0, 3, 0, 3][a.f]);
+  squash(ctx, a, 0.7);
+  // pince arrière
+  limb(ctx, [[46, -50], [64, -58], [72, -76]], 13, 11, P.redD, { lw: BLW, rim: false });
+  bigClaw(ctx, 74, -84, 1.2, 0.4, a.f % 2 ? 0.4 : 0.05, P.redD, null);
+  // ----- forteresse de sable sur le dos
+  ctx.save(); ctx.translate(6, -84);
+  const sand = (sh, o = {}) => fig(ctx, sh, P.sand, { rim: false, lw: 3.2, glint: false, hi: 0.2, ...o });
+  const crenel = (x, y, w, n) => { for (let i = 0; i < n; i++) fig(ctx, RR(x + (i * w) / n + 1, y - 7, w / n - 3, 9, 1.5), P.sand, { rim: false, lw: 2.6, glint: false }); };
+  // drapeau
+  const fw = a.ph;
+  limb(ctx, [[2, -112], [2, -78]], 3.6, 3.6, P.pole, { rim: false, lw: 2.4 });
+  const flag = B([[3, -111], [16, -114 + Math.sin(fw) * 2], [30, -110 + Math.sin(fw + 1.3) * 3], [28, -98 + Math.sin(fw + 1.6) * 3], [15, -100 + Math.sin(fw + 0.6) * 2], [3, -98]], 0.4);
+  fig(ctx, flag, P.flag, { rim: false, lw: 2.6, size: 12 });
+  gangBadge(ctx, 15, -105 + Math.sin(fw + 0.8) * 2, 4.6, '#fff3d6', OUT);
+  if (V === 3) flame(ctx, 2, -112, 7, a.ph);
+  // tours
+  crenel(-50, -66, 26, 3);
+  sand(RR(-50, -66, 26, 60, 3), { inside: () => { ctx.fillStyle = P.sandD; for (const y of [-50, -30]) ctx.fillRect(-52, y, 30, 2.4); } });
+  fig(ctx, B([[-41, -46], [-41, -54], [-37, -58], [-33, -54], [-33, -46]], 0.3), P.door, { rim: false, lw: 2.2, glint: false, hi: 0 });
+  crenel(-14, -84, 30, 3);
+  sand(RR(-14, -84, 30, 80, 3), { inside: () => { ctx.fillStyle = P.sandD; for (const y of [-66, -46, -26]) ctx.fillRect(-16, y, 34, 2.4); } });
+  fig(ctx, B([[-5, -62], [-5, -71], [1, -76], [7, -71], [7, -62]], 0.3), P.door, { rim: false, lw: 2.2, glint: false, hi: 0 });
+  crenel(26, -56, 24, 3);
+  sand(RR(26, -56, 24, 50, 3), { inside: () => { ctx.fillStyle = P.sandD; for (const y of [-40, -22]) ctx.fillRect(24, y, 28, 2.4); } });
+  // rempart + porte
+  crenel(-58, -26, 116, 8);
+  sand(RR(-58, -26, 116, 26, 3), {
+    inside: () => {
+      fig(ctx, B([[-10, 2], [-10, -12], [0, -20], [10, -12], [10, 2]], 0.3), P.door, { rim: false, lw: 2.6, glint: false, hi: 0 });
+      ctx.fillStyle = P.sandD; ctx.fillRect(-60, -12, 120, 2.4);
+      for (const [x, y, c] of [[-40, -10, P.shell], [34, -16, P.shell], [44, -6, P.weed]]) { ell(ctx, x, y, 4, 3.4); ctx.fillStyle = c; ctx.fill(); stroke(ctx, 1.6); }
+    },
+  });
+  // petit canon sur le rempart
+  ctx.save(); ctx.translate(-50, -30); ctx.rotate(-0.25);
+  fig(ctx, RR(-18, -5, 22, 10, 4), P.cannon, { rim: false, lw: 2.6, glint: false, hi: 0.3 });
+  blob(ctx, -18, 0, 3, OUT, { lw: 0, rim: false, glint: false });
+  ctx.restore();
+  if (V === 1) for (const x of [-37, 1, 38]) spike(ctx, x, x === 1 ? -92 : x < 0 ? -74 : -64, -Math.PI / 2, 10, 6, P.gold);
+  ctx.restore();
+  // carapace
+  const shell = B([[-64, -38], [-56, -66], [-32, -84], [0, -90], [32, -84], [56, -66], [64, -38], [52, -20], [0, -14], [-52, -20]]);
+  fig(ctx, shell, P.red, {
+    lw: BLW, crack: 42,
+    inside: () => {
+      ell(ctx, 0, -16, 56, 12); ctx.fillStyle = P.belly; ctx.fill();
+      const rnd = seeded(5);
+      for (let i = 0; i < 6; i++) { ell(ctx, 10 + rnd() * 44, -70 + rnd() * 30, 3 + rnd() * 2, 2.4 + rnd() * 2); fillA(ctx, '#ffb69a', 0.7); }
+    },
+  });
+  for (const [x, y, an] of [[-62, -48, Math.PI + 0.35], [-58, -62, Math.PI + 0.7], [62, -48, -0.35]]) spike(ctx, x, y, an, 10, 7, V === 1 ? P.gold : P.red);
+  // yeux pédonculés
+  const blink = a.f === 3;
+  for (const [x, h] of [[-44, 0], [-20, 6]]) limb(ctx, [[x + 4, -70], [x + 2, -96 - h], [x, -110 - h]], 8, 7, P.red, { rim: false, lw: 3.2 });
+  eye(ctx, -44, -116, 10, { ry: 11.5, skin: P.red, inner: 1, anger: 0.65, lid: 0.15, iris: P.iris, blink });
+  eye(ctx, -20, -122, 11, { ry: 12.8, skin: P.red, inner: -1, anger: 0.65, lid: 0.15, iris: P.iris, blink });
+  brow(ctx, -58, -130, -38, -125, 7.5);
+  brow(ctx, -4, -139, -26, -133, 8);
+  // bouche
+  const m = B([[-46, -44], [-30, -50], [-10, -50], [2, -44], [-10, -34], [-34, -34]]);
+  fig(ctx, m, '#6e1730', { rim: false, lw: 3.2, glint: false, hi: 0, inside: () => { ell(ctx, -22, -33, 14, 6); ctx.fillStyle = '#ff6d8a'; ctx.fill(); } });
+  fang(ctx, -40, -48, 7, 5.4); fang(ctx, -6, -48.5, 7, 5.4); fang(ctx, -24, -36, 5, 4, true);
+  blush(ctx, -56, -44, 6, 3); blush(ctx, 10, -44, 6, 3);
+  if (V === 2) { drip(ctx, -24, -32, 10, a.ph); drip(ctx, 30, -18, 8, a.ph + 2); }
+  // pince géante avant levée
+  limb(ctx, [[-50, -46], [-74, -56], [-86, -80]], 18, 16, P.red, { lw: BLW });
+  bigClaw(ctx, -88, -94, 2, -0.35 + a.s * 0.06, a.f % 2 ? 0.5 : 0.04, P.red, null);
+  ctx.restore();
+  motes(ctx, a, 32, -100, -200, 190, 180, 7);
+}
+
+// Contour hirsute : échantillonne une forme lisse et ajoute des mèches pointues
+function shag(pts, amp, n = 28, seed = 1) {
+  const r = seeded(seed);
+  const s = spline([...pts, pts[0], pts[1]], 6).slice(0, -6);
+  const out = [];
+  const N = s.length;
+  const step = Math.max(1, Math.floor(N / n));
+  let cx = 0, cy = 0; for (const p of s) { cx += p[0]; cy += p[1]; } cx /= N; cy /= N;
+  for (let i = 0; i < N; i += step) {
+    const p = s[i], q = s[(i + Math.floor(step / 2)) % N];
+    out.push(p);
+    const dx = q[0] - cx, dy = q[1] - cy, d = Math.hypot(dx, dy) || 1;
+    const k = amp * (0.6 + r() * 0.6);
+    out.push([q[0] + dx / d * k, q[1] + dy / d * k]);
+  }
+  return out;
+}
+
+// =====================================================================
+//  B4. Yéti Suprême — colosse de neige : couronne de glace, poings-glaçons, écharpe déchirée
+// =====================================================================
+const YLORD = {
+  rim: '#8fe8ff',
+  fur: ['#eef4ff', 'b'], furS: ['#b8c8ec', 'b'], face: ['#5b8ee8', 'd'], faceL: ['#9cc2ff', 'd'],
+  ice: ['#9ff0ff', 'g'], iceD: ['#4ab8e8', 'g'], scarf: ['#e8334a', 'a'], scarf2: ['#fff4f0', 'c'], iris: ['#2a4ab0', 'e'], mouth: ['#3a1a4a', 'k'],
+};
+function iceFist(ctx, P, x, y, r, rot, a) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+  for (const [ang, len] of [[-2.2, 1.0], [-1.6, 1.3], [-1.0, 1.05], [-0.4, 0.8]]) {
+    const dx = Math.cos(ang), dy = Math.sin(ang);
+    fig(ctx, PL([[dx * r * 0.7 - dy * 4, dy * r * 0.7 + dx * 4], [dx * r * (1.2 + len * 0.9), dy * r * (1.2 + len * 0.9)], [dx * r * 0.7 + dy * 4, dy * r * 0.7 - dx * 4]]), P.ice, { rim: false, lw: 2.6, glint: false, hi: 0.4, size: 6 });
+  }
+  glow(ctx, 0, 0, r * 2, P.ice, 0.35);
+  fig(ctx, PL([[-r, -r * 0.6], [-r * 0.4, -r * 1.05], [r * 0.7, -r * 0.9], [r * 1.05, -r * 0.1], [r * 0.7, r * 0.9], [-r * 0.5, r], [-r * 1.05, r * 0.2]]), P.iceD, {
+    rim: false, lw: 3.2, hi: 0.35, size: r,
+    inside: () => { ctx.beginPath(); ctx.moveTo(-r * 0.6, -r * 0.6); ctx.lineTo(r * 0.2, r * 0.4); ctx.moveTo(r * 0.3, -r * 0.7); ctx.lineTo(r * 0.6, r * 0.2); stroke(ctx, 2.2, rgba('#ffffff', 0.7)); },
+  });
+  ctx.restore();
+}
+function drawYetiLord(ctx, a, P) {
+  const st = a.step;
+  // flocons
+  for (let i = 0; i < 4; i++) { const ph = (a.f / 4 + i * 0.25) % 1; sparkle(ctx, -70 + i * 45 + Math.sin(ph * 6) * 4, -200 + ph * 60 + (i % 2) * 30, 3.5, rgba('#ffffff', 0.9)); }
+  // pieds
+  const foot = (x, y, c) => fig(ctx, B([[x - 18, y], [x - 18, y - 9], [x - 6, y - 15], [x + 10, y - 14], [x + 13, y - 3], [x + 6, y + 0.5]]), c, { rim: false, lw: 3.2 });
+  foot(26 - st * 5, a.lift === -1 ? -6 : 0, shade(P.face, -0.2));
+  foot(-24 + st * 5, a.lift === 1 ? -6 : 0, P.face);
+  ctx.save();
+  ctx.translate(0, -a.up * 3);
+  squash(ctx, a, 0.8);
+  // bras arrière (poing de glace au sol)
+  limb(ctx, [[40, -140], [64, -104], [66, -52]], 34, 28, P.furS, { lw: BLW, rim: false });
+  iceFist(ctx, P, 66 - st * 2, -40, 18, 0.4, a);
+  // corps hirsute
+  const bodyPts = shag([[-50, -120], [-34, -170], [0, -186], [40, -170], [62, -120], [58, -60], [40, -26], [0, -18], [-40, -26], [-58, -64]], 9, 30, 4);
+  const body = PL(bodyPts);
+  fig(ctx, body, P.fur, {
+    lw: BLW, crack: 50, size: 70,
+    inside: () => {
+      ctx.fillStyle = rgba(P.furS, 0.9);
+      smooth(ctx, [[20, -170], [64, -120], [60, -40], [20, -20], [40, -80]]); ctx.fill();
+    },
+  });
+  // boutons de charbon (clin d'œil aux bonshommes de neige du gang)
+  for (const [x, y] of [[-14, -112], [-10, -86], [-8, -60]]) blob(ctx, x, y, 6, '#2e2638', { lw: 2.4, rim: false });
+  // écharpe déchirée
+  const w = a.ph;
+  limb(ctx, [[22, -150], [46, -150 + Math.sin(w) * 3], [68, -142 + Math.sin(w + 1.3) * 5], [86, -150 + Math.sin(w + 2.5) * 6]], 16, 10, shade(P.scarf, -0.12), { lw: 3.2 });
+  limb(ctx, [[-40, -146], [-10, -140], [26, -150]], 18, 18, P.scarf, { lw: 3.2, inside: () => { ctx.fillStyle = P.scarf2; for (let x = -36; x < 30; x += 14) ctx.fillRect(x, -160, 5, 30); } });
+  if (V === 1) { pauldron(ctx, 36, -158, 18, 0.4); pauldron(ctx, -40, -154, 16, -0.5); }
+  ctx.restore();
+  // ----- tête
+  ctx.save();
+  ctx.translate(0, -a.up * 4);
+  squash(ctx, a, 0.5);
+  const headPts = shag([[-62, -170], [-52, -200], [-24, -214], [8, -210], [24, -190], [22, -160], [0, -146], [-36, -146]], 6, 20, 9);
+  fig(ctx, PL(headPts), P.fur, { lw: BLW, size: 40, cx: -18, cy: -180 });
+  // couronne de glace
+  ctx.save(); ctx.translate(-18, -206);
+  glow(ctx, 0, -14, 42, P.ice, 0.5);
+  for (const [x, h, sw] of [[-26, 18, 7], [-13, 28, 8], [0, 38, 9], [13, 28, 8], [26, 18, 7]]) {
+    fig(ctx, PL([[x - sw, 2], [x - sw * 0.3, -h * 0.75], [x, -h], [x + sw * 0.4, -h * 0.7], [x + sw, 2]]), P.ice, { rim: false, lw: 2.8, hi: 0.45, size: 10, cx: x, cy: -h / 2, inside: () => { ctx.beginPath(); ctx.moveTo(x - sw * 0.3, -2); ctx.lineTo(x - sw * 0.1, -h * 0.7); stroke(ctx, 2, rgba('#ffffff', 0.8)); } });
+  }
+  fig(ctx, RR(-34, -4, 68, 10, 4), P.iceD, { rim: false, lw: 3, glint: false, hi: 0.35 });
+  blob(ctx, 0, 1, 4.6, V === 1 ? '#ff2a48' : '#ffffff', { lw: 2.2, rim: false, hi: 0.5 });
+  ctx.restore();
+  // visage bleu (agrandi)
+  ctx.translate(-34, -150); ctx.scale(1.22, 1.22); ctx.translate(34, 150);
+  const face = B([[-66, -170], [-60, -188], [-40, -196], [-14, -192], [4, -180], [2, -160], [-16, -150], [-50, -152]], 0.5);
+  fig(ctx, face, P.face, { lw: 3.2, inside: () => { ell(ctx, -42, -160, 20, 9); ctx.fillStyle = P.faceL; ctx.fill(); } });
+  const blink = a.f === 3;
+  eye(ctx, -46, -177, 7.4, { ry: 8.6, skin: P.face, inner: 1, anger: 0.7, lid: 0.15, iris: P.iris, blink });
+  eye(ctx, -22, -178, 8.6, { ry: 10, skin: P.face, inner: -1, anger: 0.7, lid: 0.15, iris: P.iris, blink });
+  brow(ctx, -60, -190, -38, -183, 8, P.furS);
+  brow(ctx, -6, -193, -30, -185, 8.6, P.furS);
+  blob(ctx, -36, -166, 6, '#2a3a7a', { ry: 4, rim: false, lw: 2.4 });
+  const m = B([[-58, -160], [-44, -156], [-26, -156], [-12, -161], [-18, -148], [-36, -143], [-52, -148]]);
+  fig(ctx, m, P.mouth, { rim: false, lw: 3, glint: false, hi: 0, inside: () => { ell(ctx, -35, -144, 13, 5); ctx.fillStyle = '#ff6d8a'; ctx.fill(); } });
+  fang(ctx, -52, -147, 11, 6, true); fang(ctx, -18, -148, 11, 6, true);
+  fang(ctx, -42, -157, 6, 4.4); fang(ctx, -28, -157, 6, 4.4);
+  if (V === 2) drip(ctx, -35, -142, 10, a.ph);
+  if (V === 3) { flame(ctx, 2, -196, 8, a.ph, 0.2); flame(ctx, 14, -184, 6.5, a.ph + 2, 0.3); }
+  ctx.restore();
+  // bras avant levé (poing de glace)
+  ctx.save(); ctx.translate(0, -a.up * 3);
+  const fx = -86 + st * 2, fy = -96 - a.up * 3 + a.s * 2;
+  limb(ctx, [[-30, -128], [-60, -120], [fx + 6, fy]], 36, 30, P.fur, { lw: BLW });
+  iceFist(ctx, P, fx, fy, 21, -0.9, a);
+  ctx.restore();
+  motes(ctx, a, 33, -100, -230, 190, 200, 7);
+}
+
+// =====================================================================
+//  B5. Aspirateur Suprême — méca-aspirateur sur chenilles : pinces, tuyau-dard, visière rouge
+// =====================================================================
+const VPRIME = {
+  rim: '#46e8ff',
+  shell: ['#c9cfee', 'b'], shellD: ['#8d94c0', 'b'], top: ['#5b4ab8', 'c'], tread: ['#2a2540', 'k'], wheel: ['#6c74a6', 'm'],
+  hose: ['#5b4ab8', 'c'], hoseD: ['#3a2c7a', 'c'], warn: ['#ffcc2a', 'a'], brush: ['#ff3d5a', 'a'], brush2: ['#ffb02e', 'a'],
+  led: ['#ff2a48', 'e'], joint: ['#3a3450', 'm'], claw: ['#d9def0', 'm'], tank: ['#bff4ff', 'k'], dust: ['#cbbfae', 'k'],
+};
+function mechClaw(ctx, P, x, y, s, rot, open) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(rot); ctx.scale(s, s);
+  for (const sg of [-1, 1]) {
+    ctx.save(); ctx.rotate(sg * (0.35 + open * 0.45));
+    fig(ctx, PL([[-3, 0], [3, 0], [4, -16], [-2, -26], [-6, -22], [-2, -14]].map(([px, py]) => [px * sg, py])), P.claw, { rim: false, lw: 2.8, hi: 0.3, size: 9 });
+    ctx.restore();
+  }
+  fig(ctx, PL([[-3, 0], [3, 0], [3, -22], [0, -27], [-3, -22]]), shade(P.claw, -0.1), { rim: false, lw: 2.6, glint: false, size: 7 });
+  blob(ctx, 0, 0, 7, P.joint, { lw: 2.8, rim: false });
+  ctx.restore();
+}
+function drawVacuumPrime(ctx, a, P) {
+  // fumée d'échappement
+  for (let i = 0; i < 3; i++) { const ph = (a.f / 4 + i / 3) % 1; ell(ctx, 52 + ph * 16, -150 - ph * 26, 5 + ph * 6, 5 + ph * 6); ctx.save(); ctx.globalAlpha = 0.75 * (1 - ph); paint(ctx, '#d8d4e8', 2); ctx.restore(); }
+  // chenilles
+  const tr = RR(-62, -32, 120, 32, 16);
+  fig(ctx, tr, P.tread, {
+    rim: false, lw: BLW,
+    inside: () => {
+      ctx.fillStyle = shade(P.tread, 0.25);
+      for (let i = 0; i < 16; i++) { const x = -60 + ((i * 8 + a.f * 2) % 124); ctx.fillRect(x, -32, 3.5, 5); ctx.fillRect(x, -5, 3.5, 5); }
+    },
+  });
+  for (const x of [-44, -16, 12, 40]) {
+    blob(ctx, x, -16, 10, P.wheel, { lw: 2.8, rim: false });
+    ctx.save(); ctx.translate(x, -16); ctx.rotate(-a.f * Math.PI / 4); ctx.fillStyle = OUT; for (let i = 0; i < 4; i++) { ctx.rotate(Math.PI / 2); ctx.fillRect(-1.4, 2, 2.8, 6); } ctx.restore();
+    blob(ctx, x, -16, 3.4, P.joint, { lw: 2, rim: false, glint: false });
+  }
+  ctx.save();
+  ctx.translate(0, -[0, 2, 0, 2][a.f]);
+  // réservoir à poussière + pots d'échappement
+  for (const x of [36, 48]) fig(ctx, RR(x, -160, 9, 40, 3), P.joint, { rim: false, lw: 3, glint: false });
+  const tank = RR(30, -128, 34, 70, 14);
+  tank(ctx); ctx.fillStyle = rgba(P.tank, 0.4); ctx.fill();
+  clip(ctx, tank, () => {
+    ctx.fillStyle = P.dust; ell(ctx, 47, -64, 20, 14); ctx.fill();
+    for (let i = 0; i < 4; i++) { const t = a.ph + i * 1.6; ell(ctx, 47 + Math.cos(t) * 9, -92 + Math.sin(t) * 14 + i * 4, 3, 3); ctx.fill(); }
+    ell(ctx, 38, -110, 3, 12); ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.fill();
+  });
+  tank(ctx); stroke(ctx, 3.2);
+  // bras arrière levé
+  limb(ctx, [[30, -112], [52, -134], [60, -158]], 13, 11, P.shellD, { lw: 3.2, rim: false });
+  blob(ctx, 52, -134, 7, P.joint, { lw: 2.6, rim: false });
+  mechClaw(ctx, P, 62, -164, 1.1, 0.4, a.f % 2 ? 0.8 : 0.3);
+  // corps-bidon
+  const body = B([[-48, -36], [-50, -90], [-44, -118], [0, -128], [44, -118], [50, -90], [48, -36], [0, -28]], 0.4);
+  fig(ctx, body, P.shell, {
+    lw: BLW, crack: 51, size: 50,
+    inside: () => {
+      ctx.save(); ctx.beginPath(); ctx.rect(-60, -54, 120, 14); ctx.clip();
+      ctx.fillStyle = P.warn; ctx.fillRect(-60, -54, 120, 14);
+      ctx.fillStyle = OUT; for (let x = -70; x < 70; x += 14) { poly(ctx, [[x, -40], [x + 7, -40], [x + 21, -54], [x + 14, -54]]); ctx.fill(); }
+      ctx.restore();
+      ctx.beginPath(); ctx.moveTo(-60, -54); ctx.lineTo(60, -54); ctx.moveTo(-60, -40); ctx.lineTo(60, -40); stroke(ctx, 2.6);
+      ctx.fillStyle = shade(P.shell, -0.3); for (const [x, y] of [[-40, -100], [40, -100], [-40, -66], [40, -66]]) { ell(ctx, x, y, 2.4, 2.4); ctx.fill(); }
+    },
+  });
+  gangBadge(ctx, 18, -82, 12, '#fff3d6', '#3a2c4c');
+  if (V === 1) { pauldron(ctx, -40, -116, 15, -0.4); pauldron(ctx, 40, -118, 15, 0.4); for (const x of [-40, -24, 24, 40]) spike(ctx, x, -32, Math.PI / 2 + (x < 0 ? 0.4 : -0.4), 10, 6, P.gold); }
+  // tête-dôme + visière
+  const head = B([[-44, -120], [-40, -146], [-20, -160], [8, -162], [30, -150], [38, -126], [0, -116]], 0.45);
+  fig(ctx, head, P.top, { lw: BLW, size: 30, crack: 52, cn: 1 });
+  const vis = RR(-46, -150, 52, 20, 8);
+  fig(ctx, vis, '#191230', {
+    rim: false, lw: 3.2, glint: false, hi: 0.08,
+    inside: () => {
+      const L = P.led;
+      glow(ctx, -20, -140, 30, L, 0.45);
+      ctx.fillStyle = L;
+      if (a.f === 3) { ctx.fillRect(-38, -142, 14, 3.4); ctx.fillRect(-16, -142, 14, 3.4); }
+      else {
+        poly(ctx, [[-40, -147], [-24, -141], [-24, -135], [-40, -138]]); ctx.fill();
+        poly(ctx, [[-2, -147], [-18, -141], [-18, -135], [-2, -138]]); ctx.fill();
+        ctx.fillStyle = mix(L, '#ffffff', 0.75);
+        poly(ctx, [[-37, -143.5], [-27, -140], [-27, -138.6], [-37, -141]]); ctx.fill();
+        poly(ctx, [[-5, -143.5], [-15, -140], [-15, -138.6], [-5, -141]]); ctx.fill();
+      }
+      ctx.fillStyle = 'rgba(255,255,255,0.07)'; for (let y = -150; y < -130; y += 2.6) ctx.fillRect(-48, y, 56, 1);
+    },
+  });
+  // grille-bouche à dents
+  fig(ctx, RR(-40, -128, 36, 9, 3), P.joint, { rim: false, lw: 2.8, glint: false, inside: () => { ctx.fillStyle = WHITE; for (let i = 0; i < 6; i++) { poly(ctx, [[-38 + i * 6, -128], [-33 + i * 6, -128], [-35.5 + i * 6, -122]]); ctx.fill(); } } });
+  // crête-brosse
+  fig(ctx, RR(-20, -170, 36, 11, 4), P.tread, { rim: false, lw: 3, glint: false });
+  if (V === 3) { for (let i = 0; i < 4; i++) flame(ctx, -14 + i * 10, -168, 9, a.ph + i * 1.5, -0.1); }
+  else {
+    for (let i = 0; i < 9; i++) {
+      const t = i / 8, x = -17 + t * 30, h = 18 + Math.sin(t * Math.PI) * 12, sw = Math.sin(a.ph + t * 2.5) * 3;
+      limb(ctx, [[x, -166], [x - 3 + sw * 0.5, -166 - h * 0.6], [x - 6 + sw, -166 - h]], 7, 3.4, i % 2 ? P.brush2 : P.brush, { lw: 2.6, rim: false });
+    }
+  }
+  // tuyau-dard au-dessus de la tête, buse pointée vers le héros
+  const hp = [[40, -60], [80, -96], [70, -168], [20, -196], [-40, -184], [-74, -150]];
+  const hs = hp.map(([x, y], i) => [x, y + (i > 2 ? a.s * 3 : 0)]);
+  limb(ctx, hs, 18, 16, P.hose, {
+    lw: BLW,
+    inside: () => { ctx.strokeStyle = P.hoseD; ctx.lineWidth = 3; for (let i = 1; i < 16; i++) { const p = along(hs, i / 16); ctx.beginPath(); ctx.moveTo(p.x - p.ty * 10, p.y + p.tx * 10); ctx.lineTo(p.x + p.ty * 10, p.y - p.tx * 10); ctx.stroke(); } },
+  });
+  const tip = hs[hs.length - 1];
+  ctx.save(); ctx.translate(tip[0], tip[1]); ctx.rotate(-2.4);
+  fig(ctx, PL([[-12, -4], [12, -4], [16, 14], [-16, 14]]), P.shellD, { rim: false, lw: 3.2, hi: 0.3, size: 14 });
+  glow(ctx, 0, 18, 22, P.led, a.f % 2 ? 0.7 : 0.45);
+  fig(ctx, RR(-17, 12, 34, 6, 2), P.joint, { rim: false, lw: 2.6, glint: false });
+  ctx.restore();
+  // bras avant tendu (pince ouverte)
+  limb(ctx, [[-36, -100], [-62, -96], [-80, -78]], 15, 13, P.shellD, { lw: 3.2 });
+  blob(ctx, -62, -96, 8, P.joint, { lw: 2.6, rim: false });
+  mechClaw(ctx, P, -84, -72, 1.25, -2.3, a.f % 2 ? 0.25 : 0.85);
+  if (V === 2) { drip(ctx, -30, -30, 9, a.ph); drip(ctx, 26, -30, 7, a.ph + 2); }
+  ctx.restore();
+  motes(ctx, a, 34, -90, -220, 180, 200, 7);
+}
+
+// =====================================================================
+//  B6. Roi Magma — slime de lave géant : couronne de feu, rochers en orbite, croûte d'obsidienne
+// =====================================================================
+const MAGMA = {
+  rim: '#ffe24a',
+  lava: ['#ff6a1a', 'b'], hot: ['#ffd23a', 'd'], crust: ['#3a1e2a', 'k'], vein: ['#ffb02e', 'g'],
+  gold2: ['#ffc83a', 'm'], rock: ['#5a3a44', 'k'], iris: ['#7a1a10', 'e'],
+};
+function drawMagmaKing(ctx, a, P) {
+  const [sx, sy] = [[1.06, 0.95], [0.97, 1.04], [1.04, 0.97], [0.98, 1.03]][a.f];
+  // rochers en orbite (arrière)
+  const rocks = [[-96, -150, 0], [98, -150, 1], [108, -70, 2]].map(([x, y, i]) => ({ x, y: y + Math.sin(a.ph + i * 2) * 6, z: i === 2 ? 1 : -1, i }));
+  const rock = (r) => {
+    ctx.save(); ctx.translate(r.x, r.y); ctx.rotate(r.i + a.ph * 0.5);
+    glow(ctx, 0, 0, 22, P.vein, 0.4);
+    fig(ctx, PL([[-11, -4], [-5, -11], [6, -10], [12, -2], [8, 9], [-4, 10], [-11, 4]]), P.rock, { rim: P.vein, lw: 3, size: 11, inside: () => { ctx.beginPath(); ctx.moveTo(-6, -2); ctx.lineTo(1, 1); ctx.lineTo(4, -5); stroke(ctx, 2, P.vein); } });
+    ctx.restore();
+  };
+  rocks.filter((r) => r.z < 0).forEach(rock);
+  ctx.save();
+  ctx.scale(sx, sy);
+  // poing arrière
+  limb(ctx, [[54, -70], [76, -84], [84, -108 + a.s * 3]], 24, 20, shade(P.lava, -0.12), { lw: BLW, rim: false });
+  blob(ctx, 86, -114 + a.s * 3, 14, shade(P.lava, -0.08), { lw: 3.2, rim: false });
+  // corps
+  const body = B([[-70, -6], [-74, -50], [-62, -100], [-36, -136], [0, -150], [36, -138], [62, -104], [74, -54], [72, -8], [40, 0], [0, 2], [-40, 0]]);
+  fig(ctx, body, P.lava, {
+    lw: BLW, crack: 53, cn: 4, size: 70,
+    inside: () => {
+      ell(ctx, -10, -10, 60, 14); ctx.fillStyle = rgba(P.hot, 0.55); ctx.fill();
+      // plaques d'obsidienne + veines de lave
+      for (const [x, y, r] of [[44, -116, 15], [56, -66, 14], [44, -24, 12], [-60, -34, 12], [-30, -134, 9]]) {
+        fig(ctx, B([[x - r, y], [x - r * 0.4, y - r * 0.9], [x + r * 0.7, y - r * 0.7], [x + r, y + r * 0.2], [x + r * 0.2, y + r * 0.8], [x - r * 0.7, y + r * 0.6]], 0.4), P.crust, { rim: rgba(P.vein, 0.9), rw: 1.6, lw: 3, glint: false, hi: 0.15 });
+      }
+      for (const [x, y, r] of [[-56, -100, 4], [24, -70, 3], [-60, -66, 2.6], [10, -30, 3]]) { ell(ctx, x, y, r, r); ctx.fillStyle = P.hot; ctx.fill(); }
+    },
+  });
+  // couronne de feu
+  ctx.save(); ctx.translate(-6, -144); ctx.rotate(-0.06);
+  for (const [x, sz, k] of [[-18, 14, 0], [0, 20, 1], [18, 14, 2]]) flame(ctx, x, -14, sz, a.ph + k * 2);
+  crown(ctx, 54, 26, PAL, ['#ff2a48', '#ffb02e', '#ff2a48']);
+  ctx.restore();
+  // visage
+  const blink = a.f === 3;
+  eye(ctx, -36, -96, 12, { ry: 13.5, skin: P.lava, inner: 1, anger: 0.7, lid: 0.15, iris: P.iris, blink });
+  eye(ctx, -2, -98, 13.5, { ry: 15.5, skin: P.lava, inner: -1, anger: 0.7, lid: 0.15, iris: P.iris, blink });
+  brow(ctx, -56, -116, -28, -108, 9);
+  brow(ctx, 20, -122, -10, -112, 9.6);
+  const m = B([[-60, -68], [-40, -62], [-12, -62], [8, -68], [0, -44], [-26, -36], [-50, -44]]);
+  fig(ctx, m, '#4a0a14', { rim: false, lw: 3.4, glint: false, hi: 0, inside: () => { ell(ctx, -26, -38, 18, 8); ctx.fillStyle = '#ff6d4a'; ctx.fill(); } });
+  for (let i = 0; i < 5; i++) { const x = -54 + i * 13; fang(ctx, x, -66 + Math.abs(i - 2) * 0.6, 8, 6.4); }
+  fang(ctx, -42, -42, 6, 5, true); fang(ctx, -12, -42, 6, 5, true);
+  if (V === 1) { pauldron(ctx, 50, -110, 18, 0.6); pauldron(ctx, -56, -104, 16, -0.6); }
+  drip(ctx, -26, -38, 10, a.ph, V === 2 ? PAL.goo : P.hot);
+  // poing avant levé
+  const fx = -88, fy = -104 + a.s * 3;
+  limb(ctx, [[-56, -60], [-80, -74], [fx + 2, fy + 8]], 26, 22, P.lava, { lw: BLW });
+  blob(ctx, fx, fy, 15, P.lava, { lw: 3.2, inside: () => { ctx.beginPath(); for (const dy of [-5, 2]) { ctx.moveTo(fx - 15, fy + dy); ctx.lineTo(fx - 6, fy + dy + 0.5); } stroke(ctx, 2.6); } });
+  ctx.restore();
+  rocks.filter((r) => r.z >= 0).forEach(rock);
+  // braises
+  for (let i = 0; i < 4; i++) { const ph = (a.f / 4 + i * 0.25) % 1; const x = -50 + i * 34, y = -150 - ph * 30; glow(ctx, x, y, 8, '#ff7a1a', 0.7 * (1 - ph)); ell(ctx, x, y, 2.2, 2.2); ctx.fillStyle = '#ffd27a'; ctx.fill(); }
+  motes(ctx, a, 35, -100, -200, 200, 190, 6);
+}
+
+// =====================================================================
+//  B7. Empereur Martien — souris impériale aux commandes d'une soucoupe-méca à tentacules
+// =====================================================================
+const MARTIAN = {
+  rim: '#ff5ad8',
+  skin: ['#8fe36a', 'b'], skinL: ['#d4f7b0', 'b'], ear: ['#ff9ec0', 'd'], tent: ['#7a5ad8', 'b'], tentL: ['#c6b2ff', 'b'],
+  hull: ['#b8bfe0', 'm'], hullD: ['#6c74a6', 'm'], band: ['#5b3ab8', 'c'], cape: ['#7a1a8a', 'c'], capeIn: ['#ff5ad8', 'a'],
+  gold2: ['#ffc83a', 'm'], light1: ['#ffe24a', 'g'], light2: ['#46e8ff', 'g'], ray: ['#ff4fd8', 'g'], iris: ['#c2187a', 'e'],
+};
+function drawMartianEmperor(ctx, a, P) {
+  const hov = [0, -3, -5, -3][a.f];
+  // tentacules
+  const tent = (x0, dir, ph, col, front) => {
+    const sw = Math.sin(a.ph + ph);
+    const pts = [[x0, -80 + hov], [x0 + dir * 10, -56], [x0 + dir * 18 + sw * 8, -30], [x0 + dir * 30 + sw * 10, -6 - Math.max(0, sw) * 6], [x0 + dir * 42 + sw * 8, -12 - Math.max(0, sw) * 6]];
+    limb(ctx, pts, 22, 7, col, { lw: BLW, rim: front ? undefined : false, inside: () => { ctx.fillStyle = P.tentL; for (let i = 1; i < 5; i++) { const p = along(pts, i / 6 + 0.05); ell(ctx, p.x + p.ty * 4 * dir, p.y - p.tx * 4 * dir, 3 - i * 0.3, 3 - i * 0.3); ctx.fill(); } } });
+  };
+  tent(26, 1, 2, shade(P.tent, -0.15), false);
+  tent(-20, -1, 0, shade(P.tent, -0.15), false);
+  tent(42, 1, 3.5, P.tent, true);
+  tent(-40, -1, 1.5, P.tent, true);
+  ctx.save();
+  ctx.translate(0, hov + 16);
+  const big = () => { ctx.translate(0, -118); ctx.scale(1.28, 1.28); ctx.translate(0, 118); };
+  ctx.save(); big();
+  // cape impériale (derrière)
+  const cs = a.s * 3;
+  fig(ctx, B([[-30, -152], [0, -176], [34, -170], [48 + cs, -132], [40, -118], [-36, -118]], 0.45), P.cape, { lw: BLW, inside: () => { ctx.fillStyle = P.capeIn; smooth(ctx, [[-20, -150], [10, -168], [30, -160], [36 + cs, -132], [20, -124], [-20, -124]]); ctx.fill(); } });
+  // coque
+  const hull = B([[-72, -104], [-54, -90], [0, -84], [54, -90], [72, -104], [52, -116], [-52, -116]], 0.45);
+  fig(ctx, hull, P.hullD, { lw: BLW, crack: 54, size: 50, inside: () => { ell(ctx, 0, -86, 16, 5); ctx.fillStyle = P.light2; ctx.fill(); } });
+  // empereur : corps + tête
+  fig(ctx, B([[-22, -120], [-20, -146], [0, -154], [20, -146], [22, -120]], 0.4), P.cape, { lw: 3.2, inside: () => { ctx.fillStyle = P.gold2; ctx.fillRect(-3, -156, 6, 40); for (const y of [-144, -134]) { ell(ctx, 0, y, 3.4, 3.4); ctx.fill(); } } });
+  const ear = (x, y, r, c) => fig(ctx, E(x, y, r, r * 0.95), c, { lw: 3.2, inside: () => { ell(ctx, x + r * 0.05, y + r * 0.1, r * 0.62, r * 0.58); ctx.fillStyle = P.ear; ctx.fill(); } });
+  ear(20, -188, 14, shade(P.skin, -0.1));
+  // col haut impérial
+  fig(ctx, PL([[-30, -150], [-40, -186], [-24, -168], [-14, -154]]), P.capeIn, { rim: false, lw: 3, glint: false });
+  fig(ctx, PL([[30, -150], [42, -190], [26, -170], [14, -154]]), shade(P.capeIn, -0.15), { rim: false, lw: 3, glint: false });
+  fig(ctx, E(-2, -170, 24, 21), P.skin, { lw: BLW, crack: 55, cn: 1, inside: () => { ell(ctx, -14, -160, 13, 8, -0.2); ctx.fillStyle = P.skinL; ctx.fill(); } });
+  ear(-16, -192, 15, P.skin);
+  // couronne haute à antennes
+  ctx.save(); ctx.translate(-2, -188);
+  for (const [x, h] of [[-12, 26], [0, 34], [12, 26]]) { limb(ctx, [[x, 0], [x * 1.1, -h]], 3, 2.4, P.gold2, { rim: false, lw: 2.2 }); glow(ctx, x * 1.1, -h - 2, 10, P.ray, 0.8); blob(ctx, x * 1.1, -h - 2, 4, P.ray, { lw: 2.2, rim: false }); }
+  crown(ctx, 30, 16, PAL, ['#ff4fd8', '#46e8ff', '#ff4fd8']);
+  ctx.restore();
+  const blink = a.f === 3;
+  eye(ctx, -14, -172, 7, { ry: 8.4, skin: P.skin, inner: 1, anger: 0.55, lid: 0.25, iris: P.iris, blink });
+  eye(ctx, 4, -173, 8.2, { ry: 9.8, skin: P.skin, inner: -1, anger: 0.55, lid: 0.25, iris: P.iris, blink });
+  brow(ctx, -24, -184, -8, -180, 5.4);
+  brow(ctx, 16, -186, -1, -181.5, 5.6);
+  blob(ctx, -26, -163, 4.6, P.ear, { rim: false, lw: 2.4 });
+  ctx.beginPath(); ctx.moveTo(-24, -156); ctx.quadraticCurveTo(-14, -151, -2, -156); ctx.quadraticCurveTo(0, -158, 1, -160); stroke(ctx, 2.8);
+  fang(ctx, -17, -154.4, 4.6, 3.6); fang(ctx, -8, -154, 4.6, 3.6);
+  ctx.restore();
+  // anneau de cockpit + lumières
+  const ring = B([[-76, -106], [-66, -118], [0, -124], [66, -118], [76, -106], [66, -96], [0, -92], [-66, -96]], 0.45);
+  fig(ctx, ring, P.hull, {
+    lw: BLW, size: 50,
+    inside: () => {
+      ctx.fillStyle = P.band; ctx.fillRect(-80, -109, 160, 9);
+      for (let i = 0; i < 9; i++) {
+        const x = -60 + i * 15, on = (i + a.f) % 3 === 0, c = i % 2 ? P.light1 : P.light2;
+        if (on) glow(ctx, x, -104.5, 12, c, 0.9);
+        ell(ctx, x, -104.5, 4, 3.4); ctx.fillStyle = on ? mix(c, '#ffffff', 0.5) : shade(c, -0.35); ctx.fill(); stroke(ctx, 1.6);
+      }
+    },
+  });
+  fig(ctx, B([[-34, -122], [-26, -130], [26, -130], [34, -122], [0, -118]], 0.4), P.hullD, { rim: false, lw: 3 });
+  if (V === 1) for (const x of [-56, -34, 34, 56]) spike(ctx, x, -118 + Math.abs(x) * 0.05, -Math.PI / 2 + x * 0.008, 12, 7, P.gold);
+  // canons à rayons
+  for (const [y, s] of [[-100, 1], [-90, 0.8]]) {
+    ctx.save(); ctx.translate(-66, y); ctx.scale(s, s);
+    fig(ctx, RR(-22, -6, 26, 12, 4), P.hullD, { rim: false, lw: 3, glint: false });
+    fig(ctx, RR(-30, -4, 10, 8, 3), P.band, { rim: false, lw: 2.6, glint: false });
+    glow(ctx, -31, 0, 16, P.ray, a.f % 2 ? 0.95 : 0.6);
+    blob(ctx, -31, 0, 4, mix(P.ray, '#ffffff', 0.4), { lw: 2, rim: false });
+    ctx.restore();
+  }
+  // sceptre à orbe (main avant)
+  ctx.save(); big();
+  const hx = -34, hy = -136 + a.s * 2;
+  ctx.save(); ctx.translate(hx, hy); ctx.rotate(-0.3);
+  fig(ctx, RR(-3, -44, 6, 56, 2.5), P.gold2, { rim: false, lw: 2.6, glint: false });
+  glow(ctx, 0, -52, 24, P.ray, 0.75);
+  blob(ctx, 0, -52, 9, P.ray, { lw: 2.8, rim: false, hi: 0.45 });
+  ctx.restore();
+  limb(ctx, [[-18, -142], [-28, -134], [hx + 2, hy + 1]], 9, 8, P.cape, { lw: 3, rim: false });
+  blob(ctx, hx, hy, 6.5, P.skin, { lw: 2.8, rim: false });
+  ctx.restore();
+  if (V === 3) { flame(ctx, 60, -114, 8, a.ph, 0.4); flame(ctx, -50, -116, 7, a.ph + 2, -0.3); }
+  if (V === 2) { drip(ctx, -30, -88, 9, a.ph); drip(ctx, 34, -88, 7, a.ph + 2); }
+  ctx.restore();
+  motes(ctx, a, 36, -100, -230, 190, 220, 7);
+}
+
+// =====================================================================
+//  Registre, mesure automatique des bornes et cache
+// =====================================================================
+// box : zone de mesure large [x0, y0, w, h] (unités de dessin, avant échelle k)
+// k   : échelle appliquée au dessin pour respecter la hauteur de jeu
 const DEFS = {
-  rat: { box: [-45, -91, 95, 98], k: 0.85, draw: drawRat },
-  dog: { box: [-60, -91, 112, 97], k: 1, draw: drawDog },
-  vacuum: { box: [-51, -79, 116, 85], k: 1, draw: drawVacuum },
-  cucumber: { box: [-41, -112, 78, 118], k: 1, draw: drawCucumber },
-  pigeon: { box: [-46, -93, 93, 99], k: 0.9, draw: drawPigeon },
-  crab: { box: [-63, -77, 126, 83], k: 0.9, draw: drawCrab },
-  wasp: { box: [-47, -142, 103, 101], k: 1, draw: drawWasp },
-  mole: { box: [-60, -100, 112, 107], k: 0.92, draw: drawMole },
-  yeti: { box: [-57, -109, 112, 115], k: 1, draw: drawYeti },
-  robodog: { box: [-60, -103, 119, 109], k: 1, draw: drawRobodog },
-  slime: { box: [-52, -93, 106, 102], k: 1, draw: drawSlime },
-  ufo: { box: [-54, -107, 108, 109], k: 1, draw: drawUfo },
-  ghost: { box: [-46, -105, 102, 98], k: 1, draw: drawGhost },
-  knightrat: { box: [-46, -106, 101, 112], k: 1, draw: drawKnightRat },
+  rat: { box: [-90, -140, 180, 160], k: 0.76, pal: RAT, draw: drawRat },
+  dog: { box: [-100, -150, 190, 170], k: 0.815, pal: DOG, draw: drawDog },
+  vacuum: { box: [-100, -130, 200, 150], k: 0.885, pal: VAC, draw: drawVacuum },
+  cucumber: { box: [-90, -160, 190, 180], k: 1.02, pal: CUC, draw: drawCucumber },
+  pigeon: { box: [-90, -150, 180, 170], k: 0.785, pal: PIG, draw: drawPigeon },
+  crab: { box: [-120, -140, 240, 160], k: 0.825, pal: CRAB, draw: drawCrab },
+  wasp: { box: [-100, -190, 210, 180], k: 0.865, pal: WASP, draw: drawWasp },
+  mole: { box: [-100, -150, 190, 170], k: 0.87, pal: MOLE, draw: drawMole },
+  yeti: { box: [-100, -170, 200, 190], k: 0.99, pal: YETI, draw: drawYeti },
+  robodog: { box: [-100, -170, 200, 190], k: 0.815, pal: ROBO, draw: drawRobodog },
+  slime: { box: [-110, -140, 220, 160], k: 0.91, pal: SLIME, draw: drawSlime },
+  ufo: { box: [-110, -160, 220, 180], k: 0.835, pal: UFO, draw: drawUfo },
+  ghost: { box: [-100, -170, 200, 190], k: 0.82, pal: GHOST, draw: drawGhost },
+  knightrat: { box: [-100, -160, 200, 180], k: 0.95, pal: KNIGHT, draw: drawKnightRat },
+};
+const BOSS_DEFS = {
+  ratKing: { box: [-130, -230, 260, 250], k: 0.86, pal: RATKING, draw: drawRatKing },
+  cerberus: { box: [-140, -230, 260, 250], k: 1.0, pal: CERB, draw: drawCerberus },
+  crabTitan: { box: [-170, -250, 300, 270], k: 0.97, pal: CTITAN, draw: drawCrabTitan },
+  yetiLord: { box: [-160, -290, 300, 310], k: 0.86, pal: YLORD, draw: drawYetiLord },
+  vacuumPrime: { box: [-160, -270, 300, 290], k: 0.9, pal: VPRIME, draw: drawVacuumPrime },
+  magmaKing: { box: [-170, -260, 340, 280], k: 0.98, pal: MAGMA, draw: drawMagmaKing },
+  martianEmperor: { box: [-170, -290, 320, 310], k: 0.84, pal: MARTIAN, draw: drawMartianEmperor },
 };
 
+function render(def, frame, variant) {
+  const P = pal(def.pal, variant);
+  const a = anim(frame);
+  return (ctx) => {
+    V = variant; PAL = P; RIM = P.rim; EYEG = variant >= 2 ? EYE_GLOW[variant] : null;
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    if (def.k !== 1) ctx.scale(def.k, def.k);
+    def.draw(ctx, a, P);
+    V = 0; RIM = '#ffffff'; EYEG = null;
+  };
+}
+// Rend une fois à basse résolution pour mesurer la zone non transparente, puis rend le sprite serré.
+function buildSprite(def, frame, variant) {
+  const k = def.k;
+  const [x0, y0, w, h] = def.box;
+  const draw = render(def, frame, variant);
+  const probe = makeSprite(x0 * k, y0 * k, w * k, h * k, draw, 1);
+  const b = opaqueBounds(probe.c);
+  const m = 2;
+  const s = makeSprite(x0 * k + b.x - m, y0 * k + b.y - m, b.w + m * 2, b.h + m * 2, draw);
+  // drapeau de contrôle : la zone de mesure était trop petite (dessin rogné)
+  s.clipped = b.x <= 0 || b.y <= 0 || b.x + b.w >= probe.c.width || b.y + b.h >= probe.c.height;
+  return s;
+}
 const spriteCache = new Map();
 const portraitCache = new Map();
-
-// Sprite pré-rendu (mis en cache). frame : 0/1 = deux poses de marche/vol.
-export function enemySprite(kind, frame = 0) {
-  const def = DEFS[kind] || DEFS.rat;
-  const fr = Math.abs(Math.floor(frame || 0)) % 2; // accepte un compteur quelconque (parité)
-  const key = (DEFS[kind] ? kind : 'rat') + ':' + fr;
+function cached(defs, fallback, kind, frame, variant) {
+  const id = defs[kind] ? kind : fallback;
+  const f = ((Math.floor(frame || 0) % 4) + 4) % 4;
+  const v = Math.max(0, Math.min(3, Math.floor(variant || 0)));
+  const key = id + ':' + f + ':' + v;
   let s = spriteCache.get(key);
-  if (!s) {
-    const [x0, y0, w, h] = def.box;
-    const k = def.k;
-    s = makeSprite(x0 * k, y0 * k, w * k, h * k, (ctx) => {
-      if (k !== 1) ctx.scale(k, k);
-      def.draw(ctx, fr);
-    });
-    spriteCache.set(key, s);
-  }
+  if (!s) { s = buildSprite(defs[id], f, v); spriteCache.set(key, s); }
   return s;
 }
 
+// Sprite pré-rendu (mis en cache). Pieds en y = 0, centré en x = 0, regarde vers la gauche.
+export function enemySprite(kind, frame = 0, variant = 0) {
+  return cached(DEFS, 'rat', kind, frame, variant);
+}
 // Portrait PNG (dataURL 96×96) pour l'interface, mis en cache.
-export function enemyPortrait(kind) {
-  const key = DEFS[kind] ? kind : 'rat';
+export function enemyPortrait(kind, variant = 0) {
+  const key = 'e:' + (DEFS[kind] ? kind : 'rat') + ':' + variant;
   let u = portraitCache.get(key);
-  if (!u) {
-    u = spriteURL(enemySprite(key, 0), 96);
-    portraitCache.set(key, u);
-  }
+  if (!u) { u = spriteURL(enemySprite(kind, 0, variant), 96); portraitCache.set(key, u); }
+  return u;
+}
+export function bossSprite(id, frame = 0, variant = 0) {
+  return cached(BOSS_DEFS, 'ratKing', id, frame, variant);
+}
+export function bossPortrait(id, variant = 0) {
+  const key = 'b:' + id + ':' + variant;
+  let u = portraitCache.get(key);
+  if (!u) { u = spriteURL(bossSprite(id, 0, variant), 128); portraitCache.set(key, u); }
   return u;
 }

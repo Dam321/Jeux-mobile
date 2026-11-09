@@ -133,13 +133,11 @@ export function idlePerHour(s) {
 export const OFFLINE_CAP_H = 12;
 
 export const BIOMES = [
-  { id: 'garden', name: 'Jardin Ensoleillé' },
-  { id: 'autumn', name: 'Forêt d\'Automne' },
-  { id: 'beach', name: 'Plage aux Sardines' },
-  { id: 'snow', name: 'Pics Enneigés' },
-  { id: 'neon', name: 'Ville Néon' },
-  { id: 'volcano', name: 'Volcan Furieux' },
-  { id: 'cosmos', name: 'Nébuleuse Féline' },
+  { id: 'garden', name: 'Jardin Ensoleillé' }, { id: 'autumn', name: 'Forêt d\'Automne' }, { id: 'beach', name: 'Plage aux Sardines' },
+  { id: 'jungle', name: 'Jungle Sauvage' }, { id: 'desert', name: 'Désert des Pharaons' }, { id: 'snow', name: 'Pics Enneigés' },
+  { id: 'underwater', name: 'Fonds Marins' }, { id: 'candy', name: 'Pays des Bonbons' }, { id: 'castle', name: 'Château Hanté' },
+  { id: 'neon', name: 'Ville Néon' }, { id: 'factory', name: 'Usine à Croquettes' }, { id: 'volcano', name: 'Volcan Furieux' },
+  { id: 'sky', name: 'Royaume des Nuages' }, { id: 'cosmos', name: 'Nébuleuse Féline' },
 ];
 export function biomeForChapter(ch) { return BIOMES[(ch - 1) % BIOMES.length]; }
 
@@ -238,7 +236,7 @@ export const PRODUCTS = {
   power_big: { kind: 'flash', name: 'Pack Puissance Ultime', price: 1999, tag: 'Offre flash', rewards: { yarn: 25000, gems: 800, feathers: 60, eggs: 25, gold: 24 } },
 
   monthly: { kind: 'card', name: 'Carte Mensuelle', price: 499, desc: '300 gemmes tout de suite + 100 gemmes / jour pendant 30 jours, +10% revenus passifs' },
-  lifetime: { kind: 'card', name: 'Carte Royale à vie', price: 2499, desc: '1000 gemmes + 80 gemmes / jour à vie, +25% revenus passifs, ouverture auto débloquée, pubs ignorées' },
+  noads: { kind: 'card', name: 'Sans Pub à vie', price: 499, desc: 'Toutes les vidéos bonus deviennent instantanées, pour toujours, + 2 vidéos bonus de plus par jour.' },
   fund: { kind: 'card', name: 'Fonds de croissance', price: 999, desc: 'Jusqu\'à 12 000 gemmes en progressant dans la campagne' },
   pass: { kind: 'pass', name: 'Passe Royal', price: 999 },
   pass_deluxe: { kind: 'pass', name: 'Passe Royal Deluxe', price: 1999 },
@@ -267,16 +265,17 @@ export const DAILY_QUESTS = [
   { id: 'summon', name: 'Invoquer 10 compétences', goal: 10, pts: 10 },
   { id: 'train', name: 'Entraîner 5 fois', goal: 5, pts: 10 },
   { id: 'ad', name: 'Regarder 2 vidéos bonus', goal: 2, pts: 5 },
+  { id: 'tower', name: 'Gravir 2 étages de la Tour des Défis', goal: 2, pts: 10 },
   { id: 'craft', name: 'Fabriquer ou forger 1 objet', goal: 1, pts: 10 },
   { id: 'market', name: 'Vendre au marché', goal: 1, pts: 5 },
   { id: 'war', name: 'Attaquer en Guerre des Gouttières', goal: 2, pts: 10 },
 ];
 export const DAILY_CHESTS = [
   { pts: 20, rewards: { yarn: 200 } },
-  { pts: 40, rewards: { gold: 1, gems: 20 } },
+  { pts: 40, rewards: { gold: 1, gems: 10, artDust: 20 } },
   { pts: 60, rewards: { yarn: 400, feathers: 3 } },
-  { pts: 80, rewards: { eggs: 2, gems: 30 } },
-  { pts: 100, rewards: { yarn: 600, gems: 50, feathers: 5 } },
+  { pts: 80, rewards: { eggs: 2, gems: 15, frags: 2 } },
+  { pts: 100, rewards: { yarn: 600, gems: 30, feathers: 5 } },
 ];
 export const LOGIN_CALENDAR = [
   { yarn: 500 }, { gems: 100 }, { feathers: 10 }, { yarn: 1000 }, { eggs: 5 }, { gems: 200 }, { costume: 'siamese', feathers: 20 },
@@ -284,10 +283,10 @@ export const LOGIN_CALENDAR = [
 
 // Objectifs (succès) — grosse source de gemmes gratuites
 export const ACHIEVEMENTS = [
-  ...[10, 25, 50, 100, 150, 200, 300].map((v) => ({ id: 'stage' + v, kind: 'stage', goal: v, name: `Atteindre l'étape ${Math.floor((v - 1) / 10) + 1}-${((v - 1) % 10) + 1}`, gems: Math.round(80 + v * 2) })),
-  ...[20, 40, 60, 80, 100, 150].map((v) => ({ id: 'lvl' + v, kind: 'level', goal: v, name: `Héros niveau ${v}`, gems: 100 + v * 2 })),
-  ...[500, 2000, 10000, 50000, 200000].map((v) => ({ id: 'open' + v, kind: 'opens', goal: v, name: `Ouvrir ${v.toLocaleString('fr-FR')} cartons`, gems: 100 + Math.round(Math.sqrt(v) * 2) })),
-  ...[5, 10, 20, 30, 50].map((v) => ({ id: 'tower' + v, kind: 'tower', goal: v, name: `Arbre à Chat étage ${v}`, gems: 150 + v * 4 })),
+  ...[10, 25, 50, 100, 150, 200, 300].map((v) => ({ id: 'stage' + v, kind: 'stage', goal: v, name: `Atteindre l'étape ${Math.floor((v - 1) / 10) + 1}-${((v - 1) % 10) + 1}`, gems: Math.round(40 + v) })),
+  ...[20, 40, 60, 80, 100, 150].map((v) => ({ id: 'lvl' + v, kind: 'level', goal: v, name: `Héros niveau ${v}`, gems: 50 + v })),
+  ...[500, 2000, 10000, 50000, 200000].map((v) => ({ id: 'open' + v, kind: 'opens', goal: v, name: `Ouvrir ${v.toLocaleString('fr-FR')} cartons`, gems: 50 + Math.round(Math.sqrt(v)) })),
+  ...[5, 10, 20, 30, 50].map((v) => ({ id: 'tower' + v, kind: 'tower', goal: v, name: `Tour des Défis étage ${v}`, gems: 60 + v * 2 })),
 ];
 
 // ---------------------------------------------------------------- Donjons
@@ -297,6 +296,8 @@ export const DUNGEONS = [
   { id: 'feather', name: 'Volière Interdite', desc: 'Plumes d\'invocation', color: '#7fd8ff', enemy: 'dog' },
 ];
 export const DUNGEON_FREE_KEYS = 2;
+export const LAIR_FREE = 3; // tickets de repaire de boss par jour
+export const lairBuyCost = (n) => 60 + n * 40; // gemmes, achats limités par le VIP (comme les clés de donjon)
 export function dungeonReward(id, lvl, bestStage) {
   if (id === 'gold') return { goldRaw: Math.round(idlePerHour(Math.max(lvl * 6, bestStage * 0.9)).gold * (1.2 + lvl * 0.05)) };
   if (id === 'yarn') return { yarn: 150 + lvl * 25 };
@@ -305,7 +306,7 @@ export function dungeonReward(id, lvl, bestStage) {
 export function dungeonStage(lvl) { return 4 + lvl * 6; }
 
 // ---------------------------------------------------------------- Arbre à Chat (tour)
-export function towerStage(floor) { return 6 + floor * 4; }
+export function towerStage(floor) { return 6 + Math.round(floor * 3.5); }
 export function towerReward(floor) {
   const r = { gems: 25 + Math.floor(floor / 5) * 5 };
   if (floor % 5 === 0) r.feathers = 5;
@@ -331,13 +332,14 @@ export const DIVISIONS = [
 ];
 export function divisionOf(rank) { return DIVISIONS.find((d) => rank <= d.max) || DIVISIONS[DIVISIONS.length - 1]; }
 export function arenaDailyGems(rank) {
-  if (rank === 1) return 600;
-  if (rank <= 3) return 450;
-  if (rank <= 10) return 300;
-  if (rank <= 25) return 180;
-  return 100;
+  if (rank === 1) return 300;
+  if (rank <= 3) return 220;
+  if (rank <= 10) return 150;
+  if (rank <= 25) return 90;
+  return 50;
 }
 
 // ---------------------------------------------------------------- Vidéos bonus (pubs simulées)
 export const AD_LIMIT = 8;
+export const AD_LIMIT_NOADS = 10;
 export const AD_REWARDS = [{ yarn: 150 }, { gems: 15 }, { speedM: 15 }, { feathers: 1 }, { rune: 10 }, { eggs: 1 }];

@@ -139,6 +139,48 @@ export function glow(ctx, x, y, r, color, a = 1) {
   ctx.fill();
 }
 
+// ------------------------------------------------------------ « cel shading » maison (style Miaou)
+// Remplit une forme avec : ombre franche (croissant côté opposé à la lumière), couleur de base,
+// tache de lumière nette et petit reflet blanc, puis le contour sombre.
+// shape(ctx) doit tracer le chemin (il peut appeler beginPath). La lumière vient d'en haut à gauche.
+// o = { cx, cy : centre approximatif, size : rayon approximatif, shadow : 0.24, depth : 0.22, hi : 0.22, glint : true, lw : 3, stroke }
+export function cel(ctx, shape, base, o = {}) {
+  const k = o.size ?? 20;
+  const lx = o.lx ?? -0.55, ly = o.ly ?? -0.83;
+  const cx = o.cx ?? 0, cy = o.cy ?? 0;
+  ctx.save();
+  shape(ctx);
+  ctx.fillStyle = shade(base, -(o.shadow ?? 0.24));
+  ctx.fill();
+  shape(ctx);
+  ctx.clip();
+  ctx.save();
+  const d = k * (o.depth ?? 0.22);
+  ctx.translate(lx * d, ly * d);
+  shape(ctx);
+  ctx.fillStyle = base;
+  ctx.fill();
+  ctx.restore();
+  if ((o.hi ?? 0.22) > 0) {
+    ell(ctx, cx + lx * k * 0.42, cy + ly * k * 0.42, k * 0.42, k * 0.22, Math.atan2(ly, lx) + Math.PI / 2);
+    ctx.fillStyle = shade(base, o.hi ?? 0.22);
+    ctx.fill();
+  }
+  if (o.glint !== false) {
+    ell(ctx, cx + lx * k * 0.58, cy + ly * k * 0.58, k * 0.1, k * 0.06, -0.6);
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.fill();
+  }
+  ctx.restore();
+  if ((o.lw ?? 3) > 0) {
+    shape(ctx);
+    ctx.lineWidth = o.lw ?? 3;
+    ctx.strokeStyle = o.stroke || OUT;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+  }
+}
+
 // ------------------------------------------------------------ sprites pré-rendus
 // Crée un sprite : zone locale [x0, x0+w] × [y0, y0+h] en unités, l'ancre (0,0) locale.
 export function makeSprite(x0, y0, w, h, draw, res = SPRITE_RES) {

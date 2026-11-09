@@ -99,6 +99,8 @@ export function injectIconDefs() {
   document.body.appendChild(d);
 }
 
+ICONS.towerTokens = ICONS.tower;
+ICONS.frags = ICONS.rel;
 export function icon(name, cls = '') {
   return `<i class="ic ${cls}">${ICONS[name] || ''}</i>`;
 }

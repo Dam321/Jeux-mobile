@@ -97,7 +97,7 @@ export const COSTUMES = [
   { id: 'tabby', name: 'Tigré Roux', r: 2, atk: 0, hp: 0, src: 'Par défaut', look: null },
   { id: 'siamese', name: 'Siamois Élégant', r: 3, atk: 0, hp: 6, src: 'Connexion jour 7', look: { fur: 'creme', pattern: 'siamese', eye: 'bleu', eyeStyle: 'sparkle' }, gear: { collar: { base: 'pearls', r: 3 } } },
   { id: 'tux', name: 'Gentleman', r: 3, atk: 6, hp: 0, src: 'Boutique d\'arène', look: { fur: 'noir', pattern: 'tuxedo', eye: 'or' }, gear: { hat: { base: 'tophat', r: 3 }, face: { base: 'monocle', r: 4 } } },
-  { id: 'snow', name: 'Flocon des Neiges', r: 3, atk: 4, hp: 8, src: 'Arbre à Chat étage 30', look: { fur: 'blanc', eye: 'glace', tail: 'fluffy' }, gear: { hat: { base: 'beanie', r: 7 }, cape: { base: 'star', r: 7 } } },
+  { id: 'snow', name: 'Flocon des Neiges', r: 3, atk: 4, hp: 8, src: 'Tour des Défis étage 30', look: { fur: 'blanc', eye: 'glace', tail: 'fluffy' }, gear: { hat: { base: 'beanie', r: 7 }, cape: { base: 'star', r: 7 } } },
   { id: 'pirate', name: 'Capitaine Moustache', r: 4, atk: 12, hp: 12, src: 'Passe Royal premium', look: { fur: 'fauve', pattern: 'tabby', eye: 'vert' }, gear: { hat: { base: 'bandana', r: 5 }, face: { base: 'patch', r: 4 }, cape: { base: 'skull', r: 5 }, weapon: { base: 'sword', r: 4 } } },
   { id: 'ninja', name: 'Ninja de l\'Ombre', r: 4, atk: 15, hp: 8, dodge: 3, src: 'Pack Ninja', look: { fur: 'ombre', eye: 'rouge', eyeStyle: 'fierce' }, gear: { face: { base: 'ninja', r: 5 }, armor: { base: 'kimono', r: 5 }, weapon: { base: 'katana', r: 5 } } },
   { id: 'gutter', name: 'Roi des Gouttières', r: 5, atk: 18, hp: 18, src: 'Guerre des Gouttières', look: { fur: 'gris', pattern: 'tabby', eye: 'ambre', ears: 'fold' }, gear: { hat: { base: 'cap', r: 5 }, armor: { base: 'hoodie', r: 5 }, face: { base: 'sun', r: 5 } } },
@@ -132,31 +132,67 @@ export const RESOURCES = [
   R('turbo', 'Moteur turbo', 4, 200, 'chip'), R('magmaCore', 'Noyau de magma', 4, 230, 'orb'), R('martianBadge', 'Insigne martien', 4, 260, 'badge'),
   // ultra-rares (tous les ennemis)
   R('moonShard', 'Éclat de lune', 5, 400, 'crystal'), R('stardust', 'Poussière d\'étoile', 6, 3000, 'star'), R('bastetTear', 'Larme de Bastet', 8, 80000, 'tear'),
+  // v3 : nouvelles maps
+  R('sand', 'Sable doré', 0, 1.5, 'pile'), R('stingerS', 'Dard de scorpion', 2, 12, 'fang'),
+  R('bandage', 'Bandelette', 0, 1.6, 'cloth'), R('scarab', 'Scarabée d\'or', 3, 30, 'badge'),
+  R('banana', 'Banane volée', 0, 1.4, 'fang'), R('monkeyIdol', 'Idole de singe', 2, 13, 'badge'),
+  R('scale', 'Écaille', 0, 1.5, 'shell'), R('hypnoEye', 'Œil hypnotique', 3, 28, 'orb'),
+  R('tooth', 'Dent de requin', 1, 2.8, 'fang'), R('goggles', 'Lunettes de plongée', 2, 14, 'chip'),
+  R('spine', 'Épine de poisson-globe', 0, 1.7, 'fang'), R('pearl', 'Perle noire', 3, 34, 'orb'),
+  R('batWing', 'Aile de chauve-souris', 0, 1.8, 'wing'), R('bloodRuby', 'Rubis sanglant', 3, 36, 'crystal'),
+  R('bone', 'Os', 0, 1.6, 'bolt'), R('skull', 'Crâne de chien', 2, 15, 'badge'),
+  R('gear', 'Engrenage', 1, 3, 'bolt'), R('core', 'Noyau de robot', 3, 38, 'chip'),
+  R('tin', 'Fer-blanc', 0, 2, 'shell'), R('label', 'Étiquette maudite', 2, 14, 'cloth'),
+  R('blackFeather', 'Plume noire', 0, 1.8, 'wing'), R('shiny', 'Trésor brillant', 2, 16, 'star'),
+  R('cloudPuff', 'Bout de nuage', 1, 3.2, 'pile'), R('boltShard', 'Éclat de foudre', 3, 40, 'crystal'),
+  R('gelatin', 'Gélatine', 0, 1.6, 'orb'), R('sugarGem', 'Gemme de sucre', 2, 13, 'crystal'),
+  R('frosting', 'Glaçage', 0, 1.7, 'pile'), R('cherry', 'Cerise d\'or', 3, 32, 'orb'),
+  R('pharaohMask', 'Masque du Pharaon', 4, 170, 'badge'), R('gorillaFist', 'Poing du Gorille', 4, 150, 'badge'),
+  R('krakenInk', 'Encre de Kraken', 4, 190, 'tear'), R('royalSugar', 'Sucre royal', 4, 200, 'crystal'),
+  R('vampFang', 'Croc du Comte', 4, 220, 'fang'), R('mixerBlade', 'Lame du Mixeur', 4, 240, 'bolt'), R('thunderFeather', 'Plume-Tonnerre', 4, 270, 'wing'),
+  R('duskEssence', 'Essence du Crépuscule', 5, 900, 'tear'), R('nightmareEssence', 'Essence de Cauchemar', 6, 4000, 'tear'), R('infernalEssence', 'Essence infernale', 7, 15000, 'tear'),
   // spéciaux
-  R('rune', 'Rune de forge', 2, 6, 'rune'), R('gutterBadge', 'Insigne de gouttière', 3, 20, 'badge'),
+  R('rune', 'Rune de forge', 2, 6, 'rune'), R('gutterBadge', 'Insigne de gouttière', 3, 20, 'badge'), R('artDust', 'Poussière d\'artefact', 3, 12, 'star'),
 ];
 export const RES_BY_ID = Object.fromEntries(RESOURCES.map((r) => [r.id, r]));
 
 // ---------------------------------------------------------------- ENNEMIS par biome + butin
 export const BIOME_ENEMIES = {
-  garden: ['rat', 'wasp', 'mole'], autumn: ['dog', 'mole', 'knightrat'], beach: ['crab', 'pigeon', 'rat'], snow: ['yeti', 'pigeon', 'ghost'],
-  neon: ['vacuum', 'robodog', 'ghost'], volcano: ['slime', 'mole', 'robodog'], cosmos: ['ufo', 'cucumber', 'ghost'],
+  garden: ['rat', 'wasp', 'mole'], autumn: ['dog', 'mole', 'knightrat'], beach: ['crab', 'pigeon', 'rat'], jungle: ['monkey', 'snake', 'wasp'],
+  desert: ['scorpion', 'mummy', 'snake'], snow: ['yeti', 'pigeon', 'ghost'], underwater: ['shark', 'puffer', 'crab'], candy: ['gummy', 'cupcake', 'wasp'],
+  castle: ['bat', 'skeleton', 'ghost'], neon: ['vacuum', 'robodog', 'ghost'], factory: ['gearbot', 'can', 'vacuum'], volcano: ['slime', 'mole', 'robodog'],
+  sky: ['crow', 'stormcloud', 'pigeon'], cosmos: ['ufo', 'cucumber', 'ghost'],
 };
 export const BIOME_BOSS = {
-  garden: { kind: 'rat', name: 'Roi des Rats', drop: 'ratCrown' }, autumn: { kind: 'dog', name: 'Cerbère le Bouledogue', drop: 'cerberusCollar' },
-  beach: { kind: 'crab', name: 'Crabe Titan', drop: 'titanPearl' }, snow: { kind: 'yeti', name: 'Yéti Suprême', drop: 'iceHeart' },
-  neon: { kind: 'vacuum', name: 'Aspirateur Suprême', drop: 'turbo' }, volcano: { kind: 'slime', name: 'Roi Magma', drop: 'magmaCore' },
-  cosmos: { kind: 'ufo', name: 'Empereur Martien', drop: 'martianBadge' },
+  garden: { boss: 'ratKing', name: 'Roi des Rats', drop: 'ratCrown', skill: 'summon' },
+  autumn: { boss: 'cerberus', name: 'Cerbère le Bouledogue', drop: 'cerberusCollar', skill: 'slam' },
+  beach: { boss: 'crabTitan', name: 'Crabe Titan', drop: 'titanPearl', skill: 'slam' },
+  jungle: { boss: 'gorilla', name: 'Gorille Géant', drop: 'gorillaFist', skill: 'slam' },
+  desert: { boss: 'pharaohRat', name: 'Rat-Pharaon', drop: 'pharaohMask', skill: 'summon' },
+  snow: { boss: 'yetiLord', name: 'Yéti Suprême', drop: 'iceHeart', skill: 'barrage' },
+  underwater: { boss: 'kraken', name: 'Kraken', drop: 'krakenInk', skill: 'barrage' },
+  candy: { boss: 'candyQueen', name: 'Reine Guimauve', drop: 'royalSugar', skill: 'summon' },
+  castle: { boss: 'vampDog', name: 'Comte Toutoula', drop: 'vampFang', skill: 'drain' },
+  neon: { boss: 'vacuumPrime', name: 'Aspirateur Suprême', drop: 'turbo', skill: 'barrage' },
+  factory: { boss: 'megaMixer', name: 'Robot Mixeur', drop: 'mixerBlade', skill: 'slam' },
+  volcano: { boss: 'magmaKing', name: 'Roi Magma', drop: 'magmaCore', skill: 'barrage' },
+  sky: { boss: 'thunderBird', name: 'Oiseau-Tonnerre', drop: 'thunderFeather', skill: 'barrage' },
+  cosmos: { boss: 'martianEmperor', name: 'Empereur Martien', drop: 'martianBadge', skill: 'summon' },
 };
+export const ALL_BOSSES = Object.values(BIOME_BOSS).map((b) => b.boss);
 export const ENEMY_DROPS = {
   rat: ['ratHair', 'ratWhisker'], wasp: ['waspWing', 'stinger'], mole: ['soil', 'moleClaw'], dog: ['dogHair', 'dogFang'],
   knightrat: ['scrap', 'crest'], crab: ['shell', 'goldClaw'], pigeon: ['feather', 'crumb'], yeti: ['snowball', 'frozenCarrot'],
   ghost: ['cloth', 'ecto'], vacuum: ['bolt', 'chip'], robodog: ['neonCable', 'battery'], slime: ['lavaJelly', 'magmaCrystal'],
   ufo: ['antenna', 'moonCheese'], cucumber: ['seed', 'cursedSeed'],
+  scorpion: ['sand', 'stingerS'], mummy: ['bandage', 'scarab'], monkey: ['banana', 'monkeyIdol'], snake: ['scale', 'hypnoEye'],
+  shark: ['tooth', 'goggles'], puffer: ['spine', 'pearl'], bat: ['batWing', 'bloodRuby'], skeleton: ['bone', 'skull'],
+  gearbot: ['gear', 'core'], can: ['tin', 'label'], crow: ['blackFeather', 'shiny'], stormcloud: ['cloudPuff', 'boltShard'],
+  gummy: ['gelatin', 'sugarGem'], cupcake: ['frosting', 'cherry'],
 };
 export const DROP_CHANCE = { common: 0.35, rare: 0.05, boss: 0.3 };
 export const GLOBAL_DROPS = [['moonShard', 0.003], ['stardust', 0.0003], ['bastetTear', 0.000015]];
-export const ENEMY_RANGED = { pigeon: '#d9c79a', wasp: '#ffe14d', ufo: '#7dff9e', ghost: '#b968ff', slime: '#ff7a1a', robodog: '#48f3ff' };
+export const ENEMY_RANGED = { pigeon: '#d9c79a', wasp: '#ffe14d', ufo: '#7dff9e', ghost: '#b968ff', slime: '#ff7a1a', robodog: '#48f3ff', snake: '#b968ff', shark: '#7fe9ff', bat: '#ff4d5e', crow: '#2a2340', stormcloud: '#ffe14d', cupcake: '#ff9fd8', mummy: '#ffd54f' };
 
 // ---------------------------------------------------------------- PANOPLIES (Atelier)
 // Chaque pièce se fabrique au niveau actuel du héros (minimum : niveau de la panoplie).
@@ -186,6 +222,36 @@ export const SETS = [
   { id: 'martian', name: 'Panoplie de l\'Empereur Martien', lvl: 180, artisan: 48, r: 7, color: '#7dff9e',
     pieces: { hat: 'helmet', face: 'star', armor: 'royal', wings: 'fairy', gloves: 'gauntlet', weapon: 'wand' },
     cost: [['antenna', 90], ['moonCheese', 15], ['cursedSeed', 8], ['martianBadge', 1], ['stardust', 1]], bonus: { 2: { atk: 50 }, 4: { hp: 70, skillDmg: 40 }, 6: { atk: 110, hp: 80, crit: 10 } } },
+  { id: 'jungle', name: 'Panoplie de la Jungle', lvl: 40, artisan: 10, r: 5, color: '#5fd068',
+    pieces: { hat: 'bandana', armor: 'tunic', weapon: 'bow', boots: 'boots', gloves: 'mitts' },
+    cost: [['banana', 50], ['monkeyIdol', 8], ['scale', 20], ['gorillaFist', 1]], bonus: { 2: { atk: 18 }, 3: { atkSpd: 12 }, 5: { atk: 32, combo: 6 } } },
+  { id: 'pharaoh', name: 'Panoplie du Rat-Pharaon', lvl: 55, artisan: 14, r: 5, color: '#ffd54f',
+    pieces: { hat: 'crown', armor: 'royal', cape: 'star', weapon: 'staff', collar: 'pearls' },
+    cost: [['sand', 60], ['scarab', 6], ['stingerS', 6], ['pharaohMask', 1]], bonus: { 2: { hp: 22 }, 3: { skillDmg: 25 }, 5: { atk: 36, hp: 30 } } },
+  { id: 'abyss', name: 'Panoplie des Abysses', lvl: 75, artisan: 20, r: 5, color: '#3fa9ff',
+    pieces: { hat: 'helmet', armor: 'plate', weapon: 'trident', cape: 'moon', ring: 'gem' },
+    cost: [['spine', 60], ['pearl', 6], ['goggles', 8], ['krakenInk', 1]], bonus: { 2: { hp: 28 }, 3: { lifesteal: 5 }, 5: { atk: 40, hp: 40 } } },
+  { id: 'sugar', name: 'Panoplie Sucrée', lvl: 85, artisan: 24, r: 6, color: '#ff9fd8',
+    pieces: { hat: 'party', armor: 'hoodie', weapon: 'ladle', boots: 'slippers', collar: 'bell', wings: 'butterfly' },
+    cost: [['gelatin', 70], ['sugarGem', 10], ['cherry', 5], ['royalSugar', 1]], bonus: { 2: { hp: 30 }, 4: { luck: 60 }, 6: { atk: 55, hp: 55, dodge: 6 } } },
+  { id: 'vampire', name: 'Panoplie du Comte', lvl: 110, artisan: 32, r: 6, color: '#b3202f',
+    pieces: { hat: 'tophat', face: 'monocle', armor: 'royal', cape: 'skull', wings: 'bat', weapon: 'scythe' },
+    cost: [['batWing', 80], ['bloodRuby', 10], ['skull', 10], ['vampFang', 1], ['moonShard', 1]], bonus: { 2: { atk: 35 }, 4: { lifesteal: 10 }, 6: { atk: 70, critDmg: 50 } } },
+  { id: 'mecha', name: 'Panoplie Méca', lvl: 125, artisan: 36, r: 6, color: '#9aa7b8',
+    pieces: { hat: 'helmet', face: 'visor', armor: 'plate', wings: 'jetpack', gloves: 'gauntlet', weapon: 'hammer' },
+    cost: [['gear', 80], ['core', 10], ['label', 10], ['mixerBlade', 1], ['moonShard', 1]], bonus: { 2: { hp: 40 }, 4: { atk: 40 }, 6: { atk: 75, hp: 60, stun: 8 } } },
+  { id: 'storm', name: 'Panoplie de la Tempête', lvl: 160, artisan: 44, r: 7, color: '#ffe14d',
+    pieces: { hat: 'wizard', face: 'star', armor: 'robe', wings: 'angel', cape: 'star', weapon: 'wand' },
+    cost: [['cloudPuff', 90], ['boltShard', 12], ['shiny', 12], ['thunderFeather', 1], ['stardust', 1]], bonus: { 2: { atk: 45 }, 4: { skillDmg: 60 }, 6: { atk: 100, crit: 10 } } },
+  { id: 'dusk', name: 'Panoplie du Crépuscule', lvl: 200, artisan: 52, r: 7, color: '#ff9d6b',
+    pieces: { hat: 'crown', face: 'sun', armor: 'kimono', cape: 'moon', wings: 'dragon', weapon: 'katana', boots: 'boots' },
+    cost: [['duskEssence', 3], ['moonShard', 3], ['scarab', 10], ['hypnoEye', 10]], bonus: { 2: { atk: 60 }, 4: { hp: 80 }, 7: { atk: 140, hp: 120, critDmg: 80 } } },
+  { id: 'nightmare', name: 'Panoplie du Cauchemar', lvl: 300, artisan: 70, r: 8, color: '#8a3cff',
+    pieces: { hat: 'helmet', face: 'patch', armor: 'royal', cape: 'skull', wings: 'bat', weapon: 'scythe', gloves: 'gauntlet', ring: 'gem' },
+    cost: [['nightmareEssence', 3], ['stardust', 2], ['bloodRuby', 15], ['core', 15]], bonus: { 2: { atk: 80 }, 4: { hp: 120 }, 8: { atk: 260, hp: 220, crit: 12 } } },
+  { id: 'infernal', name: 'Panoplie Infernale', lvl: 400, artisan: 85, r: 8, color: '#ff4d1a',
+    pieces: { hat: 'viking', face: 'visor', armor: 'plate', cape: 'skull', wings: 'dragon', weapon: 'axe', boots: 'boots', collar: 'spikes' },
+    cost: [['infernalEssence', 3], ['stardust', 3], ['magmaCore', 3], ['boltShard', 20]], bonus: { 2: { atk: 110 }, 4: { hp: 160 }, 8: { atk: 380, hp: 300, bossDmg: 150 } } },
   { id: 'bastet', name: 'Panoplie de Bastet', lvl: 250, artisan: 60, r: 8, color: '#fff27a',
     pieces: { hat: 'crown', face: 'monocle', armor: 'royal', cape: 'star', wings: 'angel', weapon: 'staff', collar: 'pearls', ring: 'gem' },
     cost: [['moonShard', 6], ['stardust', 3], ['bastetTear', 1], ['crest', 10], ['ecto', 10]], bonus: { 2: { atk: 60 }, 4: { hp: 100 }, 6: { atk: 150, crit: 12 }, 8: { atk: 250, hp: 200, critDmg: 100 } } },

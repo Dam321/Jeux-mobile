@@ -73,7 +73,7 @@ export function h(sel, props, ...children) {
     for (const k in props) {
       const v = props[k];
       if (v == null || v === false) continue;
-      if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
+      if (k === 'style' && typeof v === 'object') { for (const sk in v) { if (sk.startsWith('--')) el.style.setProperty(sk, v[sk]); else el.style[sk] = v[sk]; } }
       else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
       else if (k === 'html') el.innerHTML = v;
       else if (k === 'cls') el.className += ' ' + v;

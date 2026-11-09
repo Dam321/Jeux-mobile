@@ -10,6 +10,11 @@ import {
 } from './content.js';
 import { weightedPick, randi, rand, pick, uid } from './util.js';
 import { itemPower, computeStats } from './stats.js';
+import {
+  ARTIFACTS, ARTIFACT_BY_ID, ARTIFACT_MAX_STARS, artifactFragsNeed, artifactLevelCost, ARTIFACT_CHEST, POTION_BY_ID, TRANSMUTE_RATIO,
+  towerFloorReward, towerMilestone, AURA_BY_ID, TITLE_BY_ID, FRAME_BY_ID, KITTEN_ATTACKS, BANNER_POOL,
+} from './content3.js';
+import { RESOURCES } from './content.js';
 
 // ------------------------------------------------------------- objets
 function rollSubs(r, n, guaranteed) {
@@ -139,9 +144,12 @@ function rollKittenRarity(st, usePity) {
     st.kittens.pityLeg = r >= 4 ? 0 : st.kittens.pityLeg + 1;
     st.kittens.pityMyth = r >= 5 ? 0 : st.kittens.pityMyth + 1;
   }
+  const feat = KITTENS.find((k) => k.id === bannerKitten(weekKeyOf()));
+  if (feat && feat.r === r && Math.random() < 0.5) return feat; // bannière vedette : 50 % de sa rareté
   const c = KITTENS.filter((k) => k.r === r);
   return pick(c.length ? c : KITTENS);
 }
+function weekKeyOf(t = Date.now()) { const d = new Date(t); const j = new Date(d.getFullYear(), 0, 1); return d.getFullYear() + '-W' + Math.ceil(((d - j) / 86400000 + j.getDay() + 1) / 7); }
 export function giveKitten(st, id) {
   const isNew = addOwned(st.kittens.owned, id);
   if (!st.kittens.seen.includes(id)) st.kittens.seen.push(id);
@@ -347,7 +355,7 @@ export function lookUnlocked(st, cat, id) {
 // ------------------------------------------------------------- récompenses génériques
 // rewards : { gold: heures d'or passif, goldRaw, gems, yarn, feathers, eggs, arenaCoins, warCoins, stone, scroll, clover, milk, relicKeys,
 //             speedH, speedM, costume, look, kitten, skill, xp, relic, <id de ressource> }
-const RES_KEYS = ['gems', 'yarn', 'feathers', 'eggs', 'arenaCoins', 'warCoins', 'stone', 'scroll', 'clover', 'milk', 'relicKeys'];
+const RES_KEYS = ['gems', 'yarn', 'feathers', 'eggs', 'arenaCoins', 'warCoins', 'towerTokens', 'stone', 'scroll', 'clover', 'milk', 'relicKeys'];
 export function grant(st, rewards) {
   const given = [];
   const add = (k, v) => { if (v) given.push({ k, v }); };
@@ -371,6 +379,10 @@ export function grant(st, rewards) {
       case 'skill': if (!st.skills.owned[v]) st.skills.owned[v] = { lvl: 1, copies: 0 }; else st.skills.owned[v].copies++; autoEquipSkills(st); add('skill', v); break;
       case 'xp': gainHeroXp(st, v); add('xp', v); break;
       case 'relic': { const it = makeRelic(st, v); addToBag(st, it); add('relic', v); break; }
+      case 'frags': { const got = randomFrags(st, v); for (const id in got) add('frag:' + id, got[id]); break; }
+      case 'aura': if (!st.cos.auras.includes(v)) st.cos.auras.push(v); else st.res.gems += 300; if (!st.cos.aura) st.cos.aura = v; add('aura', v); break;
+      case 'title': if (!st.cos.titles.includes(v)) st.cos.titles.push(v); add('title', v); break;
+      case 'frame': if (!st.cos.frames.includes(v)) st.cos.frames.push(v); add('frame', v); break;
       default: break;
     }
   }
@@ -388,3 +400,113 @@ export function addPassXp(st, xp) {
 }
 export function passTier(st) { return Math.floor(st.pass.xp / PASS_XP_PER_TIER); }
 export { STAT_GROWTH, SETS };
+
+// ------------------------------------------------------------- artefacts
+function pickArtifactByOdds() {
+  const r = weightedPick(ARTIFACT_CHEST.odds);
+  const c = ARTIFACTS.filter((a) => a.r === r);
+  return pick(c.length ? c : ARTIFACTS);
+}
+export function addFrags(st, id, n) {
+  const o = st.artifacts.owned[id] || (st.artifacts.owned[id] = { lvl: 1, stars: -1, frags: 0 });
+  o.frags += n;
+  if (o.stars < 0 && o.frags >= artifactFragsNeed(-1)) { o.frags -= artifactFragsNeed(-1); o.stars = 0; autoEquipArtifacts(st); return true; }
+  return false;
+}
+export function randomFrags(st, n) {
+  const got = {};
+  let left = n;
+  while (left > 0) {
+    const a = pickArtifactByOdds();
+    const k = Math.min(left, 1 + Math.floor(Math.random() * 3));
+    got[a.id] = (got[a.id] || 0) + k;
+    addFrags(st, a.id, k);
+    left -= k;
+  }
+  return got;
+}
+export function artifactChest(st, n) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const a = pickArtifactByOdds();
+    const k = 2 + Math.floor(Math.random() * 3);
+    const unlocked = addFrags(st, a.id, k);
+    const dust = 15 + Math.floor(Math.random() * 30);
+    st.mats.artDust += dust;
+    out.push({ a, k, dust, unlocked });
+  }
+  st.artifacts.pulls += n;
+  return out;
+}
+export function artifactStarUp(st, id) {
+  const o = st.artifacts.owned[id];
+  if (!o || o.stars < 0 || o.stars >= ARTIFACT_MAX_STARS) return false;
+  const need = artifactFragsNeed(o.stars);
+  if (o.frags < need) return false;
+  o.frags -= need; o.stars++;
+  return true;
+}
+export function artifactLevelUp(st, id, times = 1) {
+  const o = st.artifacts.owned[id];
+  if (!o || o.stars < 0) return 0;
+  const A = ARTIFACT_BY_ID[id];
+  let k = 0;
+  for (let i = 0; i < times; i++) {
+    const c = artifactLevelCost(A, o.lvl);
+    if (st.mats.artDust < c.dust || st.res.gold < c.gold) break;
+    st.mats.artDust -= c.dust; st.res.gold -= c.gold; o.lvl++; k++;
+  }
+  return k;
+}
+export function autoEquipArtifacts(st, slots = 4) {
+  const eq = st.artifacts.equipped;
+  for (let i = 0; i < slots; i++) {
+    if (eq[i]) continue;
+    const best = ARTIFACTS.filter((a) => st.artifacts.owned[a.id] && st.artifacts.owned[a.id].stars >= 0 && !eq.includes(a.id)).sort((a, b) => b.r - a.r)[0];
+    if (best) eq[i] = best.id;
+  }
+}
+
+// ------------------------------------------------------------- alchimie & transmutation
+export function brewPotion(st, id, n = 1) {
+  const P = POTION_BY_ID[id];
+  if (!P) return 0;
+  let k = 0;
+  for (let i = 0; i < n; i++) {
+    if (!P.cost.every(([r, q]) => (st.mats[r] || 0) >= q)) break;
+    for (const [r, q] of P.cost) st.mats[r] -= q;
+    st.potions[id] = (st.potions[id] || 0) + 1;
+    k++;
+  }
+  if (k) bumpQuest(st, 'craft', 1);
+  return k;
+}
+export function usePotion(st, id) {
+  const P = POTION_BY_ID[id];
+  if (!st.potions[id]) return false;
+  st.potions[id]--;
+  const key = P.boost + 'Until';
+  st.boost[key] = Math.max(Date.now(), st.boost[key] || 0) + P.min * 60000;
+  return true;
+}
+export function transmute(st, resId) {
+  const R = RESOURCES.find((x) => x.id === resId);
+  if (!R || R.r >= 6) return null;
+  const need = TRANSMUTE_RATIO[R.r];
+  if ((st.mats[resId] || 0) < need) return null;
+  const pool = RESOURCES.filter((x) => x.r === R.r + 1 && !['rune', 'gutterBadge', 'artDust', 'bastetTear'].includes(x.id) && !x.id.endsWith('Essence'));
+  if (!pool.length) return null;
+  st.mats[resId] -= need;
+  const out = pick(pool);
+  st.mats[out.id] = (st.mats[out.id] || 0) + 1;
+  return out;
+}
+
+// ------------------------------------------------------------- Tour des Défis
+export function towerRewards(f) {
+  const r = { ...towerFloorReward(f) };
+  const m = towerMilestone(f);
+  return { base: r, milestone: m };
+}
+export function bannerKitten(week) { return BANNER_POOL[Math.abs(week.split('').reduce((a, c) => a * 31 + c.charCodeAt(0), 7)) % BANNER_POOL.length]; }
+export { KITTEN_ATTACKS, AURA_BY_ID, TITLE_BY_ID, FRAME_BY_ID };

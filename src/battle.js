@@ -4,18 +4,21 @@
 //  (ou chat rival + ses chatons en PvP).
 // =====================================================================
 import { CatRig } from './gfx/cat.js';
-import { enemySprite, ENEMY_INFO } from './gfx/enemies.js';
+import { monsterSprite, monsterInfo } from './gfx/bestiary.js';
+import { KittenRig } from './gfx/kittens.js';
 import { buildScenery, drawScenery, drawSceneryFront } from './gfx/scenery.js';
 import { FX } from './gfx/fx.js';
 import { GROUND_Y, drawSprite, ell, rgba, glow, OUT } from './gfx/draw.js';
-import { castSkill, kittenAttack, heroBasicAttack, meleeImpactFx, enemyAttack, hurtFx } from './gfx/skills.js';
+import { castSkill, kittenAttack, heroBasicAttack, heroFinisher, meleeImpactFx, enemyAttack, hurtFx, bossSkill, auraTick } from './gfx/skills.js';
 import { hitDamage, attackInterval } from './combat.js';
 import { ENEMY_RANGED, ELEMENTS } from './content.js';
+import { AURA_BY_ID, KITTEN_ATTACKS } from './content3.js';
 import { fmt } from './util.js';
 import { sfx } from './audio.js';
 
-const HERO_X = 118;
-const KIT_OFF = [[-40, 10], [-64, -6], [-20, 16], [-86, 4], [24, 18]];
+const HERO_X = 100;
+const KIT_OFF = [[-36, 10], [-60, -6], [-84, 8], [-14, 18], [-106, -2]]; // tous derrière le héros, en éventail
+const HERO_SCALE = 0.62, KIT_SCALE = 0.5, MOB_SCALE = 0.62;
 const AMBIENT = {
   petals: ['#ffb3d1', '#ffffff'], leaves: ['#ff8c2b', '#ffc23d', '#e85a1f'], bubbles: ['#bff4ff'], snow: ['#ffffff'],
   fireflies: ['#ff4fd8', '#3ff5ff', '#ffe14d'], embers: ['#ff7a2f', '#ffd23f'], stars: ['#ffffff', '#c77dff'], rain: ['#9fc6e8'],
@@ -44,47 +47,51 @@ export class Battle {
     this.time = 0;
   }
 
-  setScenery(id, seed = 1) {
-    if (this.sceneKey === id + seed) return;
-    this.sceneKey = id + seed;
-    this.sc = buildScenery(id, seed);
+  setScenery(id, seed = 1, variant = 0) {
+    const key = id + ':' + seed + ':' + variant;
+    if (this.sceneKey === key) return;
+    this.sceneKey = key;
+    this.sc = buildScenery(id, seed, this.stage.quality === 'low' ? 1.5 : 2, variant);
   }
   get viewW() { return this.stage.viewW; }
-  heroX() { return Math.max(HERO_X, Math.min(170, this.viewW * 0.31)); }
+  heroX() { return Math.max(HERO_X, Math.min(160, this.viewW * 0.3)); }
 
   // ------------------------------------------------------------- création des unités
   makeHero(def, side) {
     const key = JSON.stringify([def.appearance, def.gear]);
     const rig = rigFor(key, () => new CatRig(def.appearance, def.gear));
     const u = {
-      side, kind: 'hero', rig, x: side ? this.viewW - this.heroX() : this.heroX(), y: GROUND_Y, facing: side ? -1 : 1, scale: 0.86,
+      side, kind: 'hero', rig, x: side ? this.viewW - this.heroX() : this.heroX(), y: GROUND_Y, facing: side ? -1 : 1, scale: HERO_SCALE, atkCount: 0, aura: AURA_BY_ID[def.aura] || null,
       stats: def.stats, hp: def.stats.hp, maxHp: def.stats.hp, shield: 0, atkT: 0.3, anim: 'idle', animK: 0, flash: 0,
       dead: false, deadT: 0, stun: 0, buff: 0, buffT: 0, name: def.name || 'Minou', style: rig.style, weaponColor: def.weaponColor || '#ffffff',
-      skills: def.skills || [], cds: (def.skills || []).map((s) => s.cd * 0.35), perks: def.perks || {}, revived: false, dash: 0, height: 110,
+      skills: def.skills || [], cds: (def.skills || []).map((s) => s.cd * 0.35), perks: def.perks || {}, revived: false, dash: 0, height: (rig.height || 128) * HERO_SCALE,
     };
     u.kittens = (def.kittens || []).map((k, i) => this.makeKitten(k, u, i));
     return u;
   }
   makeKitten(k, owner, i) {
-    const rig = rigFor('k_' + k.id, () => new CatRig({ ...k.look }, k.look.wings ? { wings: { base: k.look.wings, r: Math.max(4, k.r) } } : {}, { baby: true }));
+    const rig = rigFor('k_' + k.id, () => new KittenRig(k.id));
     const off = KIT_OFF[i % KIT_OFF.length];
     return {
-      side: owner.side, kind: 'kitten', rig, owner, id: k.id, el: k.el, r: k.r, mult: k.mult, name: k.name,
-      ox: off[0], oy: off[1], x: owner.x + off[0] * owner.facing, y: GROUND_Y + off[1], facing: owner.facing, scale: 0.46,
-      t: 1 + i * 0.6, ultT: 8 + i * 2, anim: 'idle', animK: 0, flash: 0, height: 46, dead: false,
+      side: owner.side, kind: 'kitten', rig, owner, id: k.id, el: k.el, r: k.r, mult: k.mult, name: k.name, atk: KITTEN_ATTACKS[k.id] || { name: k.name, pattern: 'orb', shape: 'star', n: 1 },
+      ox: off[0], oy: off[1], x: owner.x + off[0] * owner.facing, y: GROUND_Y + off[1], facing: owner.facing, scale: KIT_SCALE,
+      t: 1 + i * 0.6, ultT: 8 + i * 2, anim: 'idle', animK: 0, flash: 0, height: (rig.height || 80) * KIT_SCALE, dead: false,
     };
   }
   makeEnemy(d, i, n) {
     const boss = d.boss, elite = d.elite;
-    const sc = (boss ? 1.75 : elite ? 1.3 : 1) * 0.88;
+    const kind = boss && d.bossKind ? d.bossKind : d.kind;
+    const sc = MOB_SCALE * (elite ? 1.22 : 1) * (d.giant ? 1.5 : 1);
     const hx = this.heroX();
-    const slotX = boss && n === 1 ? hx + 150 : hx + 100 + i * 36;
-    const info = ENEMY_INFO[d.kind] || { h: 80 };
+    const slotX = boss && n <= 2 && i === 0 ? hx + 120 : hx + 74 + i * 30;
+    const info = monsterInfo(kind);
+    const M = this.mods;
+    const hp = d.hp * (M.enemyHp || 1) * (d.giant ? 6 : 1);
     return {
-      side: 1, kind: 'enemy', ekind: d.kind, def: d, x: this.viewW + 40 + i * 46, tx: Math.min(slotX, this.viewW - 50), y: GROUND_Y + (i % 2 ? -8 : 7),
-      facing: -1, scale: sc, stats: { atk: d.atk, def: d.def, crit: 0, critDmg: 50, dodge: 0 }, hp: d.hp, maxHp: d.hp, atkT: d.interval * (0.3 + Math.random() * 0.5),
-      interval: d.interval, anim: 'run', animK: 0, flash: 0, dead: false, deadT: 0, stun: 0, boss, elite, name: d.name, arrived: false,
-      height: info.h * sc, ranged: ENEMY_RANGED[d.kind] || null, t: Math.random() * 10,
+      side: 1, kind: 'enemy', ekind: kind, variant: this.enc.variant || 0, def: d, x: this.viewW + 30 + i * 36, tx: Math.min(slotX, this.viewW - 40), y: GROUND_Y + (i % 2 ? -6 : 6),
+      facing: -1, scale: sc, stats: { atk: d.atk * (d.giant ? 3 : 1), def: d.def * (M.enemyDef || 1), crit: 0, critDmg: 50, dodge: 0 }, hp, maxHp: hp, atkT: d.interval * (0.3 + Math.random() * 0.5),
+      interval: d.interval / (M.enemySpd || 1), anim: 'run', animK: 0, flash: 0, dead: false, deadT: 0, stun: 0, boss, elite, name: d.name, arrived: false,
+      height: info.h * sc, fly: !!info.fly, ranged: ENEMY_RANGED[d.kind] || null, t: Math.random() * 10, skT: 4, enraged: false, bossSkill: d.skill || null,
     };
   }
 
@@ -113,12 +120,21 @@ export class Battle {
   start(enc) {
     this.enc = enc;
     this.mode = enc.mode;
+    this.mods = {};
+    for (const m of enc.mods || []) for (const k in m) if (!['id', 'name', 'desc'].includes(k)) this.mods[k] = typeof m[k] === 'number' && typeof this.mods[k] === 'number' ? this.mods[k] * m[k] : m[k];
+    if (this.mods.timer) enc.timeLimit = this.mods.timer;
     this.timers = [];
     this.fx.clear();
     this.wave = 0;
     this.units = [];
     const keepHp = enc.keepHp && this.hero && !this.hero.dead ? this.hero.hp / this.hero.maxHp : 1;
-    this.hero = this.makeHero(this.playerDef, 0);
+    const pdef = { ...this.playerDef };
+    const M = this.mods;
+    if (M.heroAtk || M.heroHp || M.lifesteal || enc.reviveBuff) pdef.stats = { ...pdef.stats, atk: pdef.stats.atk * (M.heroAtk || 1) * (1 + (enc.reviveBuff || 0)), hp: pdef.stats.hp * (M.heroHp || 1), lifesteal: (pdef.stats.lifesteal || 0) + (M.lifesteal || 0) };
+    if (M.noSkills) pdef.skills = [];
+    if (M.noKittens) pdef.kittens = [];
+    else if (M.kitMult) pdef.kittens = pdef.kittens.map((k) => ({ ...k, mult: k.mult * M.kitMult }));
+    this.hero = this.makeHero(pdef, 0);
     this.hero.hp = this.hero.maxHp * keepHp;
     this.units.push(this.hero, ...this.hero.kittens);
     this.rival = null;
@@ -131,12 +147,22 @@ export class Battle {
     this.game.onEncounterStart && this.game.onEncounterStart(enc);
   }
   setPhase(p) { this.phase = p; this.phaseT = 0; }
+  summonMinions(boss, n = 2) {
+    const kinds = this.enc.minions || ['rat'];
+    for (let i = 0; i < n; i++) {
+      const d = { kind: kinds[i % kinds.length], hp: boss.maxHp / 14, atk: boss.stats.atk / 3, def: boss.stats.def / 2, interval: 1.5, name: null };
+      const e = this.makeEnemy(d, 1 + i, 3);
+      e.x = boss.x + 30 + i * 20; e.tx = boss.x - 40 - i * 24; e.y = GROUND_Y + (i ? -8 : 8);
+      this.units.push(e);
+      this.fx.burst(e.x, e.y - 20, { count: 16, color: ['#b968ff', '#ffffff'], speed: 120, size: 8, life: 0.5, shape: 'smoke' });
+    }
+  }
   spawnWave() {
     const defs = this.enc.waves[this.wave];
     defs.forEach((d, i) => this.units.push(this.makeEnemy(d, i, defs.length)));
     const boss = defs.find((d) => d.boss);
     this.game.onBoss && this.game.onBoss(boss ? { name: boss.name || 'Boss' } : null);
-    if (boss) { sfx('thunder'); this.flash('#ff2a3d', 0.25); this.shake(0.6); this.game.onBanner && this.game.onBanner('BOSS', boss.name, 'boss'); }
+    if (boss) { sfx('thunder'); this.flash('#ff2a3d', 0.25); this.shake(0.6); this.game.onBossIntro && this.game.onBossIntro(boss, this.enc.variant || 0); }
   }
 
   // ------------------------------------------------------------- API pour les effets
@@ -223,6 +249,7 @@ export class Battle {
   // ------------------------------------------------------------- IA des héros (joueur et rival)
   heroAct(u, dt) {
     if (u.dead) return;
+    if (u.aura) auraTick(this, u, dt);
     if (u.buffT > 0) { u.buffT -= dt; if (u.buffT <= 0) u.buff = 0; if (Math.random() < 0.25) { const [x, y] = this.center(u); this.fx.emit(x + (Math.random() - 0.5) * 40, y + (Math.random() - 0.5) * 50, 0, -40, '#ffd23f', 7, 0.6, { shape: 'star' }); } }
     if (u.stun > 0) { u.stun -= dt; return; }
     const foes = this.foes(u);
@@ -244,7 +271,9 @@ export class Battle {
         if (!second && u.perks.double && Math.random() < 0.12) this.later(0.12, () => { this.say(u, 'DOUBLE !', 'tag'); strike(target, true); });
         if (!second && Math.random() * 100 < (S.combo || 0)) this.later(0.16, () => { this.say(u, 'COMBO', 'tag'); strike(target, true); });
       };
-      heroBasicAttack(this, u, tg, () => strike(tg, false));
+      u.atkCount = (u.atkCount || 0) + 1;
+      if (u.atkCount % 5 === 0) heroFinisher(this, u, tg, (target) => { const r = this.hit(u, target, 2.5, { basic: true }); if (r && r.crit) sfx('crit'); });
+      else heroBasicAttack(this, u, tg, () => strike(tg, false));
     }
     for (let i = 0; i < u.skills.length; i++) {
       u.cds[i] -= dt;
@@ -289,6 +318,16 @@ export class Battle {
       if (e.x <= e.tx) { e.x = e.tx; e.arrived = true; e.anim = 'idle'; }
       return;
     }
+    if (this.mods.regen && e.hp < e.maxHp) e.hp = Math.min(e.maxHp, e.hp + e.maxHp * this.mods.regen * dt);
+    if (e.boss) {
+      if (!e.enraged && e.hp < e.maxHp * 0.3) {
+        e.enraged = true; e.interval *= 0.6; this.say(e, 'ENRAGÉ !', 'big'); this.flash('#ff2a3d', 0.35); this.shake(0.8); sfx('thunder');
+      }
+      if (e.bossSkill) {
+        e.skT -= dt;
+        if (e.skT <= 0 && this.hero && !this.hero.dead) { e.skT = e.enraged ? 4.5 : 6.5; e.anim = 'attack'; e.animK = 0; bossSkill(this, e, this.hero); }
+      }
+    }
     if (e.stun > 0) { e.stun -= dt; e.anim = 'stun'; return; }
     if (e.anim === 'stun') e.anim = 'idle';
     e.atkT += dt;
@@ -321,6 +360,7 @@ export class Battle {
       case 'walk':
         this.scroll += dt * 150;
         H.anim = 'run';
+        if (H.aura) auraTick(this, H, dt);
         if (this.phaseT > (this.wave === 0 ? 0.8 : 1)) { this.spawnWave(); H.anim = 'idle'; this.setPhase('fight'); }
         break;
       case 'fight': {
@@ -393,12 +433,12 @@ export class Battle {
       if (u.dead && u.kind !== 'hero') continue;
       if (u.kind === 'enemy' && (u.boss || u.elite)) {
         ctx.save(); ctx.globalCompositeOperation = 'lighter';
-        ell(ctx, u.x, u.y, 34 * u.scale, 8 * u.scale); ctx.strokeStyle = rgba(u.boss ? '#ff2a3d' : '#ff9d00', 0.55 + Math.sin(this.time * 5) * 0.2); ctx.lineWidth = 3; ctx.stroke();
+        ell(ctx, u.x, u.y, (u.boss ? 80 : 36) * u.scale, (u.boss ? 16 : 8) * u.scale); ctx.strokeStyle = rgba(u.boss ? '#ff2a3d' : '#ff9d00', 0.55 + Math.sin(this.time * 5) * 0.2); ctx.lineWidth = 2.5; ctx.stroke();
         ctx.restore();
       }
       if (u.kind === 'kitten' && u.r >= 3) {
         ctx.save(); ctx.globalCompositeOperation = 'lighter';
-        glow(ctx, u.x, u.y - 2, 18 + u.r * 2, ELEMENTS[u.el].color, 0.35 + Math.sin(this.time * 4 + u.ox) * 0.1);
+        glow(ctx, u.x, u.y - 2, 12 + u.r * 1.5, ELEMENTS[u.el].color, 0.35 + Math.sin(this.time * 4 + u.ox) * 0.1);
         ctx.restore();
       }
     }
@@ -431,34 +471,28 @@ export class Battle {
       return;
     }
     // ennemi
-    const frame = u.anim === 'run' ? Math.floor(u.t * 6) % 2 : Math.floor(u.t * 2.2) % 2;
-    const spr = enemySprite(u.ekind, frame);
+    const frame = u.anim === 'run' ? Math.floor(u.t * 9) % 4 : Math.floor(u.t * 3.5) % 4;
+    const spr = monsterSprite(u.ekind, frame, u.variant);
     let x = u.x, y = u.y, sx = u.scale, sy = u.scale, rot = 0, alpha = 1;
-    if (u.anim === 'run') y -= Math.abs(Math.sin(u.t * 10)) * 4 * u.scale;
+    if (u.anim === 'run' && !u.fly) y -= Math.abs(Math.sin(u.t * 10)) * 3 * u.scale;
+    if (u.fly) y -= Math.sin(u.t * 3) * 3;
     else if (u.anim === 'attack') { const a = Math.sin(Math.min(1, u.animK) * Math.PI); x -= a * (u.ranged ? 4 : 18); sx *= 1 + a * 0.06; sy *= 1 - a * 0.06; }
     else if (u.anim === 'hurt') { const a = Math.sin(Math.min(1, u.animK) * Math.PI); x += a * 7; rot = a * 0.08; }
     else if (u.anim === 'dead') { const a = Math.min(1, u.animK); sy *= 1 - a * 0.7; sx *= 1 + a * 0.3; alpha = 1 - a; }
     else { const b = Math.sin(u.t * 3); sy *= 1 + b * 0.025; sx *= 1 - b * 0.012; }
     if (u.stun > 0) rot = Math.sin(u.t * 18) * 0.08;
     if (alpha <= 0.01) return;
-    ctx.fillStyle = 'rgba(20,8,40,0.26)'; ell(ctx, u.x, u.y, 26 * u.scale, 6 * u.scale); ctx.fill();
+    ctx.fillStyle = 'rgba(20,8,40,0.26)'; ell(ctx, u.x, u.y, (u.boss ? 70 : 30) * u.scale, (u.boss ? 12 : 6) * u.scale); ctx.fill();
     drawSprite(ctx, spr, x, y, sx, sy, rot, alpha);
-    if (u.boss && !u.dead) this.drawCrown(ctx, x, y - u.height - 4, u.scale);
+    if (u.enraged && !u.dead) { ctx.save(); ctx.globalCompositeOperation = 'lighter'; glow(ctx, x, y - u.height * 0.45, u.height * 0.75, '#ff2a3d', 0.25 + Math.sin(this.time * 8) * 0.1); ctx.restore(); }
     if (u.flash > 0) { ctx.save(); ctx.globalCompositeOperation = 'lighter'; glow(ctx, x, y - u.height * 0.45, u.height * 0.6, u.flashColor || '#ffffff', u.flash * 0.75); ctx.restore(); }
     if (u.stun > 0) for (let i = 0; i < 3; i++) { const a = u.t * 5 + i * 2.1; this.fx.emit(x + Math.cos(a) * 16, y - u.height - 6 + Math.sin(a) * 4, 0, 0, '#ffd23f', 5, 0.05, { shape: 'star' }); }
-  }
-  drawCrown(ctx, x, y, s) {
-    ctx.save(); ctx.translate(x, y); ctx.scale(s * 0.55, s * 0.55);
-    ctx.beginPath(); ctx.moveTo(-16, 6); ctx.lineTo(-18, -10); ctx.lineTo(-8, -2); ctx.lineTo(0, -14); ctx.lineTo(8, -2); ctx.lineTo(18, -10); ctx.lineTo(16, 6); ctx.closePath();
-    ctx.fillStyle = '#ffcc33'; ctx.fill(); ctx.lineWidth = 2.6; ctx.strokeStyle = OUT; ctx.stroke();
-    ctx.fillStyle = '#ff2a3d'; ctx.beginPath(); ctx.arc(0, 1, 3, 0, Math.PI * 2); ctx.fill();
-    ctx.restore();
   }
   drawBar(ctx, u) {
     if (u.dead || u.kind === 'kitten' || (u.kind === 'enemy' && (!u.arrived && u.x > this.viewW - 10))) return;
     if (u.boss) return;
-    const w = u.kind === 'hero' ? 56 : 40, h = u.kind === 'hero' ? 7 : 5.5;
-    const x = u.x + (u.dash || 0) * u.facing - w / 2, y = u.y - u.height - (u.kind === 'hero' ? 12 : 8);
+    const w = u.kind === 'hero' ? 44 : 30, h = u.kind === 'hero' ? 5.5 : 4.5;
+    const x = u.x + (u.dash || 0) * u.facing - w / 2, y = u.y - u.height - (u.kind === 'hero' ? 8 : 6) - (u.fly ? 4 : 0);
     ctx.fillStyle = '#1a0d2e'; ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x - 1.5, y - 1.5, w + 3, h + 3, 4) : ctx.rect(x - 1.5, y - 1.5, w + 3, h + 3); ctx.fill();
     const r = Math.max(0, u.hp / u.maxHp);
     const g = ctx.createLinearGradient(0, y, 0, y + h);

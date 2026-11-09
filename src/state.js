@@ -73,7 +73,11 @@ export function defaultState() {
     lastSeen: now,
     seed,
     name: 'Minou',
-    res: { gold: 300, gems: 150, yarn: 300, feathers: 5, eggs: 3, arenaCoins: 0, warCoins: 0, speedMin: 30, stone: 0, scroll: 0, clover: 0, milk: 0, relicKeys: 0 },
+    res: { gold: 300, gems: 150, yarn: 300, feathers: 5, eggs: 3, arenaCoins: 0, warCoins: 0, towerTokens: 0, speedMin: 30, stone: 0, scroll: 0, clover: 0, milk: 0, relicKeys: 0 },
+    artifacts: { owned: {}, equipped: [null, null, null, null, null, null], pulls: 0 },
+    cos: { auras: [], aura: null, titles: ['kitten'], title: 'kitten', frames: ['basic'], frame: 'basic' },
+    potions: {},
+    loyalty: [],
     mats: Object.fromEntries(RESOURCES.map((r) => [r.id, 0])),
     hero: { lvl: 1, xp: 0 },
     gear: { weapon: null, hat: null, face: null, armor: null, cape: null, wings: null, gloves: null, boots: null, collar: null, ring: null },
@@ -86,17 +90,18 @@ export function defaultState() {
     unlocks: [],
     costumes: { owned: ['tabby'], current: 'tabby', show: false },
     artisan: { lvl: 1, xp: 0 },
-    boost: { cloverUntil: 0 },
+    boost: { cloverUntil: 0, atkUntil: 0, hpUntil: 0, goldUntil: 0, luckUntil: 0, royalUntil: 0 },
     relic: { pulls: 0, pity: 0 },
     camp: { ch: 1, st: 1, best: 0, auto: true, failStreak: 0 },
-    tower: { floor: 1 },
+    tower: { floor: 1, best: 0, shop: {}, reviveBuff: 0 },
+    lairs: { tickets: 3, buys: 0 },
     dungeons: Object.fromEntries(DUNGEONS.map((d) => [d.id, { lvl: 1, keys: DUNGEON_FREE_KEYS, buys: 0 }])),
     arena: { tickets: ARENA_FREE_TICKETS, buys: 0, wins: 0, claimedKey: '', shop: {}, bots: null, order: null, season: weekKey(), best: ARENA_SIZE },
     market: null,
     war: null,
     iap: {
       spent: 0, vip: 0, bought: {}, daily: {}, weekly: {}, firstRecharge: 0,
-      monthlyUntil: 0, lifetime: false, fund: false, fundClaimed: [], pass: 0, flash: null, lastFlash: 0, months: {},
+      monthlyUntil: 0, noads: false, fund: false, fundClaimed: [], pass: 0, flash: null, lastFlash: 0, months: {},
     },
     pass: { xp: 0, free: [], prem: [], seasonStart: now },
     daily: null,
@@ -133,6 +138,8 @@ export function loadState(fromHot) {
   if (!st.arena.bots) st.arena.bots = makeBots(st.seed);
   if (!st.arena.order) st.arena.order = [...st.arena.bots.map((b) => b.id), 'me'];
   if (!st.war) st.war = makeWar(st.seed);
+  if (st.iap.lifetime) { st.iap.noads = true; delete st.iap.lifetime; }
+  if (st.tower.best < st.tower.floor - 1) st.tower.best = st.tower.floor - 1;
   return st;
 }
 
@@ -154,13 +161,15 @@ export function ensureDaily(st) {
     st.daily = {
       key: k,
       q: Object.fromEntries(DAILY_QUESTS.map((q) => [q.id, 0])),
-      qDone: [], pts: 0, chests: [], ads: 0, freeGift: false, vipGift: false, cardGems: false, summonFree: false, changeBought: 0,
+      qDone: [], pts: 0, chests: [], ads: 0, freeGift: false, vipGift: false, cardGems: false, summonFree: false, changeBought: 0, artFree: false, towerDaily: false,
     };
     st.daily.q.login = 1;
     for (const d of DUNGEONS) {
       st.dungeons[d.id].keys = Math.max(st.dungeons[d.id].keys, DUNGEON_FREE_KEYS);
       st.dungeons[d.id].buys = 0;
     }
+    st.lairs.tickets = Math.max(st.lairs.tickets, 3);
+    st.lairs.buys = 0;
     st.arena.tickets = Math.max(st.arena.tickets, ARENA_FREE_TICKETS);
     st.arena.buys = 0;
     if (st.war) { st.war.energy = Math.max(st.war.energy, WAR_ENERGY); st.war.buys = 0; }

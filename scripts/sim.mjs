@@ -12,7 +12,7 @@ function fightStage(st, s) {
   const v = VIP_PERKS[vipLevel(st.iap.vip)];
   const ch = Math.floor(s / 10) + 1, stg = (s % 10) + 1;
   let wins = 0;
-  for (let i = 0; i < 3; i++) if (quickFight(S, equippedSkills(st, v.skillSlots), equippedKittens(st, v.kittenSlots), campaignWaves(ch, stg)).win) wins++;
+  for (let i = 0; i < 3; i++) if (quickFight(S, equippedSkills(st, v.skillSlots), equippedKittens(st, v.kittenSlots), campaignWaves(ch, stg).waves).win) wins++;
   return wins >= 2;
 }
 function buy(st, id) {
@@ -20,7 +20,7 @@ function buy(st, id) {
   st.iap.spent += p.price; st.iap.vip += p.price;
   if (p.gems) st.res.gems += p.gems;
   if (p.rewards) grant(st, p.rewards);
-  if (id === 'lifetime') { st.iap.lifetime = true; st.res.gems += 1000; }
+  if (id === 'noads') st.iap.noads = true;
   if (id === 'monthly') { st.iap.monthlyUntil = Date.now() + 30 * 864e5; st.res.gems += 300; }
   if (!st.iap.firstRecharge) { st.iap.firstRecharge = 2; grant(st, FIRST_RECHARGE); }
 }
@@ -31,7 +31,7 @@ function run(profile, days = 30) {
   const ach = new Set();
   for (let d = 1; d <= days; d++) {
     if (profile === 'whale') {
-      if (d === 1) { ['starter', 'ninja', 'cyber', 'whale', 'kittens', 'monthly', 'lifetime', 'fund', 'pass_deluxe'].forEach((x) => buy(st, x)); for (let i = 0; i < 4; i++) buy(st, 'gems_6'); }
+      if (d === 1) { ['starter', 'ninja', 'cyber', 'whale', 'kittens', 'monthly', 'noads', 'fund', 'pass_deluxe'].forEach((x) => buy(st, x)); for (let i = 0; i < 4; i++) buy(st, 'gems_6'); }
       ['daily_1', 'daily_2', 'daily_3'].forEach((x) => buy(st, x));
       if (d % 7 === 1) ['weekly_1', 'weekly_2', 'forge', 'luck', 'relic_pack'].forEach((x) => buy(st, x));
       buy(st, 'gems_6');
@@ -70,6 +70,8 @@ function run(profile, days = 30) {
     if (st.res.eggs >= 1) { summonKittens(st, Math.floor(st.res.eggs)); st.res.eggs = 0; }
     for (const id in st.skills.owned) while (levelUp(st.skills.owned[id]));
     for (const id in st.kittens.owned) while (levelUp(st.kittens.owned[id]));
+    // craft avant l'entraînement : la meilleure panoplie possible, pièce par pièce
+    for (const S of SETS.slice().reverse()) for (const slot of Object.keys(S.pieces)) { const c = craftCheck(st, S.id, slot); if (c.ok) { const res = craft(st, S.id, slot); if (res && (!st.gear[slot] || true)) { const cur = st.gear[slot]; st.gear[slot] = res.it; st.bag = st.bag.filter((x) => x.id !== res.it.id); } } }
     let guard = 0;
     while (guard++ < 5000) {
       const opts = ['atk', 'hp', 'def'].map((id) => [id, trainingCost(id, st.train[id])]).sort((a, b) => a[1] - b[1]);
@@ -80,15 +82,13 @@ function run(profile, days = 30) {
     while (pushes++ < 400 && fightStage(st, s)) {
       st.res.gold += 400 * Math.pow(1.06, s); st.res.yarn += 8 + Math.floor(s / 5);
       // butin : ~10 ennemis par étape (1 boss toutes les 10)
-      const kinds = campaignWaves(Math.floor(s / 10) + 1, (s % 10) + 1).flat();
+      const kinds = campaignWaves(Math.floor(s / 10) + 1, (s % 10) + 1).waves.flat();
       for (const e of kinds) rollDrops(st, e.kind, e.boss, e.drop, 1);
       s++;
     }
     // farm quotidien (~2 h de combats répétés sur la dernière étape)
-    for (let k = 0; k < 250; k++) { const e = campaignWaves(Math.floor(Math.max(0, s - 1) / 10) + 1, (Math.max(0, s - 1) % 10) + 1).flat(); for (const x of e) rollDrops(st, x.kind, x.boss, x.drop, 1); }
+    for (let k = 0; k < 250; k++) { const e = campaignWaves(Math.floor(Math.max(0, s - 1) / 10) + 1, (Math.max(0, s - 1) % 10) + 1).waves.flat(); for (const x of e) rollDrops(st, x.kind, x.boss, x.drop, 1); }
     st.camp.best = s;
-    // craft : la meilleure panoplie possible, pièce par pièce
-    for (const S of SETS.slice().reverse()) for (const slot of Object.keys(S.pieces)) { const c = craftCheck(st, S.id, slot); if (c.ok) { const res = craft(st, S.id, slot); if (res && (!st.gear[slot] || true)) { const cur = st.gear[slot]; st.gear[slot] = res.it; st.bag = st.bag.filter((x) => x.id !== res.it.id); } } }
     for (const k in ACHIEVEMENTS) { const a = ACHIEVEMENTS[k]; if (!ach.has(a.id) && ((a.kind === 'stage' && s >= a.goal) || (a.kind === 'level' && st.hero.lvl >= a.goal) || (a.kind === 'opens' && st.stats.opens >= a.goal))) { ach.add(a.id); st.res.gems += a.gems; } }
     const S = computeStats(st);
     const sets = Object.values(st.gear).filter((x) => x && x.set).length;
@@ -96,4 +96,4 @@ function run(profile, days = 30) {
   }
   return log;
 }
-for (const p of ['f2p', 'dolphin', 'whale']) { console.log('=== ' + p); console.table(run(p)); }
+const ONLY = process.argv[2]; for (const p of ['f2p', 'dolphin', 'whale']) { if (ONLY && p !== ONLY) continue; console.log('=== ' + p); console.table(run(p)); }

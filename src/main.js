@@ -6,22 +6,27 @@ import { h, fmt, fmtTime, dayKey, pick } from './util.js';
 import { icon } from './ui/icons.js';
 import { initAudio, sfx, setSound, setMusic } from './audio.js';
 import { loadState, saveState, ensureDaily, defaultState, makeBots, wipeSave } from './state.js';
-import { computeStats, statsFromPower, itemPower, kittenStats, skillLevelMult, SKILL_BY_ID } from './stats.js';
+import { computeStats, statsFromPower, itemPower, kittenStats, skillLevelMult, SKILL_BY_ID, COSTUME_BY_ID } from './stats.js';
 import {
   openBoxes, boxUpgradeInfo, summonSkills, summonKittens, wildKitten, levelUp, levelUpWithMilk, canLevel, autoEquipSkills, autoEquipKittens,
   train, idleRate, idlePending, grant, bumpQuest, addPassXp, passTier, equipItem, disposeItem, addToBag, rollDrops, luckMult,
   craft, forge, breakItem, relicPull, lookUnlocked, lookPrice,
+  artifactChest, artifactStarUp, artifactLevelUp, autoEquipArtifacts, brewPotion, usePotion, transmute, towerRewards,
 } from './economy.js';
 import { equippedSkills, equippedKittens } from './combat.js';
-import { campaignWaves, dungeonWaves, towerWaves } from './encounters.js';
+import { campaignWaves, dungeonWaves, towerWaves, lairWaves } from './encounters.js';
 import {
   RARITIES, VIP_PERKS, vipLevel, PRODUCTS, FIRST_RECHARGE, FUND_TIERS, PASS_TIERS, DAILY_QUESTS, DAILY_CHESTS,
   LOGIN_CALENDAR, ACHIEVEMENTS, DUNGEONS, dungeonReward, towerReward, ARENA_SHOP, arenaDailyGems, AD_LIMIT, AD_REWARDS,
   stageIndex, stageGold, stageYarn, killGold, biomeForChapter, recycleGold, skipGemCost, BOX_MAX_LEVEL, PASS_XP_PER_TIER,
-  trainingCost, TRAININGS, SKILLS,
+  trainingCost, TRAININGS, SKILLS, BIOMES, AD_LIMIT_NOADS, LAIR_FREE, lairBuyCost,
 } from './config.js';
 import {
-  KITTEN_BY_ID, COSTUME_BY_ID, RES_BY_ID, BIOME_BOSS, ELEMENTS, SETS, SET_BY_ID, RELIC_CHEST, HETERO_COST, LOOK_UNLOCK, TERRITORIES, WAR_SHOP, WAR_ENERGY, breakRunes,
+  eraOf, ERA_DROPS, ARTIFACT_BY_ID, ARTIFACT_CHEST, artifactSlots, AURA_BY_ID, TITLE_BY_ID, FRAME_BY_ID, STYLE_SHOP, LOYALTY,
+  towerFloorInfo, TOWER_SHOP, TOWER_REVIVE_GEMS, POTION_BY_ID,
+} from './content3.js';
+import {
+  KITTEN_BY_ID, RES_BY_ID, BIOME_BOSS, ELEMENTS, SETS, SET_BY_ID, RELIC_CHEST, HETERO_COST, LOOK_UNLOCK, TERRITORIES, WAR_SHOP, WAR_ENERGY, breakRunes,
 } from './content.js';
 import { ensureMarket, tickMarket, buyLot, listLot, cancelListing, quickSell, sellGems, buyGems } from './market.js';
 import {
@@ -30,6 +35,7 @@ import {
 } from './pvp.js';
 import { catPortraitURL, catFullURL, FURS, PATTERNS, EYES, EYE_STYLES, EARS, TAILS } from './gfx/cat.js';
 import { RCOL } from './gfx/gear.js';
+import { kittenFullURL } from './gfx/kittens.js';
 
 const BATCHES = [1, 5, 10, 25, 50];
 const EXCHANGES = [
@@ -79,7 +85,7 @@ class Game {
   afterLoad(first) {
     const st = this.st;
     const fresh = ensureDaily(st);
-    autoEquipSkills(st); autoEquipKittens(st);
+    autoEquipSkills(st); autoEquipKittens(st); autoEquipArtifacts(st, artifactSlots(vipLevel(st.iap.vip)));
     this.applyQuality();
     this.recalc(true);
     this.ui.renderGear();
@@ -122,14 +128,14 @@ class Game {
   portrait() { const g = this.gearVisual(); return catPortraitURL(this.appearance(), { hat: g.hat, face: g.face }, 96); }
   fullURL() { return catFullURL(this.appearance(), this.gearVisual(), 220); }
   costumeURL(id) { const c = COSTUME_BY_ID[id]; return c.look ? catFullURL({ ...this.st.look, ...c.look }, c.gear || {}, 150) : catFullURL(this.st.look, {}, 150); }
-  kittenURL(id) { const k = KITTEN_BY_ID[id]; return catFullURL(k.look, k.look.wings ? { wings: { base: k.look.wings, r: Math.max(4, k.r) } } : {}, 120, true); }
+  kittenURL(id) { return kittenFullURL(id, 120); }
 
   playerDef() {
     const st = this.st, S = this.stats;
     const perks = VIP_PERKS[S.vip];
     const gear = this.gearVisual();
     const kits = equippedKittens(st, perks.kittenSlots).map((k) => ({ id: k.id, name: k.name, el: k.el, r: k.r, look: k.look, mult: k.mult }));
-    return { name: 'Minou', appearance: this.appearance(), gear, stats: S, skills: equippedSkills(st, perks.skillSlots), kittens: kits, weaponColor: gear.weapon ? RCOL[gear.weapon.r] : '#ffffff', perks: S.perks };
+    return { name: 'Minou', appearance: this.appearance(), gear, stats: S, skills: equippedSkills(st, perks.skillSlots), kittens: kits, weaponColor: gear.weapon ? RCOL[gear.weapon.r] : '#ffffff', perks: S.perks, aura: st.cos.aura };
   }
 
   // ------------------------------------------------------------------ stats
@@ -149,15 +155,21 @@ class Game {
   startCampaign() {
     const c = this.st.camp;
     this.special = null;
-    this.battle.setScenery(biomeForChapter(c.ch).id, c.ch * 13 + 7);
-    this.battle.start({ mode: 'campaign', waves: campaignWaves(c.ch, c.st), stageIdx: stageIndex(c.ch, c.st), biome: biomeForChapter(c.ch).id });
+    const cw = campaignWaves(c.ch, c.st);
+    this.battle.setScenery(cw.biome, c.ch * 13 + 7, cw.variant);
+    this.battle.start({ mode: 'campaign', ...cw, stageIdx: stageIndex(c.ch, c.st) });
     this.ui.updateStageInfo();
   }
+  era() { return eraOf(this.st.camp.ch, BIOMES.length); }
   setStage(s) {
     const oldCh = this.st.camp.ch;
     const { ch, st } = this.stageFromIdx(s);
     this.st.camp.ch = ch; this.st.camp.st = st;
-    if (ch > oldCh) this.ui.banner(`CHAPITRE ${ch}`, biomeForChapter(ch).name, 'chapter');
+    if (ch > oldCh) {
+      const er = eraOf(ch, BIOMES.length), olde = eraOf(oldCh, BIOMES.length);
+      if (er.e > olde.e) this.ui.banner(`ÈRE ${er.name.toUpperCase()}`, 'Les monstres sont plus forts… et le butin aussi !', 'vip');
+      else this.ui.banner(`MAP ${ch}`, biomeForChapter(ch).name, 'chapter');
+    }
   }
   nextIsBoss() { return this.st.camp.best % 10 === 9; }
   challenge() {
@@ -187,18 +199,22 @@ class Game {
     bb.querySelector('.bfill2').dataset.r = '1';
   }
   onBanner(t, s, c) { this.ui.banner(t, s, c); }
+  onBossIntro(b, variant) { this.ui.bossIntro(b, variant); }
   onCutin(sk) { this.ui.cutin(sk); }
   onSkillCast(i) { this.ui.pulseSkill(i); }
   onKill(e, scr) {
     const st = this.st;
     st.stats.kills++;
     const mode = this.battle.mode;
-    if (mode === 'campaign' || mode === 'dungeon' || mode === 'tower') {
+    if (mode === 'campaign' || mode === 'dungeon' || mode === 'tower' || mode === 'lair') {
       const s = mode === 'campaign' ? this.battle.enc.stageIdx : Math.max(0, st.camp.best - 5);
       const mult = (e.boss ? 10 : e.elite ? 3 : 1) * (1 + (this.stats.goldPct || 0) / 100);
       st.res.gold += killGold(s) * mult;
       this.ui.fly('gold', scr.x, scr.y, e.boss ? 6 : 2);
-      const drops = rollDrops(st, e.ekind, e.boss, e.def.drop, luckMult(st, this.stats));
+      const era = mode === 'campaign' ? this.battle.enc.era : { e: 0, lootMult: 1 };
+      const drops = rollDrops(st, e.def.kind, e.boss, e.def.drop, luckMult(st, this.stats) * (era ? era.lootMult : 1));
+      if (era && era.e >= 1) for (let v = 1; v <= Math.min(3, era.e); v++) { const [id, p] = ERA_DROPS[v]; if (Math.random() < p * (e.boss ? 20 : 1) * luckMult(st, this.stats)) { st.mats[id] = (st.mats[id] || 0) + 1; drops[id] = (drops[id] || 0) + 1; } }
+      if (e.boss && Math.random() < 0.25) { const n = 2 + Math.floor(Math.random() * 3); this.give({ frags: n }, 'Fragments d\'artefact', false, true); }
       if (Object.keys(drops).length) this.ui.loot(drops);
     }
     if (e.boss) st.stats.bossKills++;
@@ -260,10 +276,10 @@ class Game {
     this.ui.renderSide();
     this.ui.refresh();
   }
-  startSpecial(sp, enc, scene) {
+  startSpecial(sp, enc, scene, variant = 0) {
     this.ui.closeSheet();
     this.special = sp;
-    if (scene) this.battle.setScenery(scene, 3);
+    if (scene) this.battle.setScenery(scene, 3, variant);
     this.battle.start(enc);
     this.ui.updateStageInfo();
   }
@@ -300,7 +316,7 @@ class Game {
     sfx('click');
     this.ui.updateHud();
   }
-  autoUnlocked() { return this.stats.vip >= 1 || this.st.hero.lvl >= 25 || this.st.iap.lifetime; }
+  autoUnlocked() { return this.stats.vip >= 1 || this.st.hero.lvl >= 25; }
   toggleAutoBox() {
     if (!this.autoUnlocked()) { this.ui.toast('Ouverture auto : héros niveau 25 ou VIP 1', 'vip'); return; }
     this.autoBox = !this.autoBox;
@@ -405,6 +421,7 @@ class Game {
     this.ui.updateHud();
   }
   spendGems(n) {
+    if (!(n >= 0) || !isFinite(n)) return false; // montant invalide : on ne débite jamais
     if (this.st.res.gems < n) { sfx('error'); this.ui.toast('Pas assez de gemmes', 'warn'); this.ui.open('shop', 'gems'); return false; }
     this.st.res.gems -= n;
     return true;
@@ -448,8 +465,9 @@ class Game {
   // ------------------------------------------------------------------ chatons
   summonKittens(n) {
     const st = this.st;
+    const price = { 1: 80, 10: 700, 35: 2400 }[n];
     if (st.res.eggs >= n) st.res.eggs -= n;
-    else if (!this.spendGems({ 1: 80, 10: 700, 35: 2400 }[n])) return;
+    else if (price == null || !this.spendGems(price)) return;
     const got = summonKittens(st, n);
     const best = Math.max(...got.map((x) => x.k.r));
     sfx(best >= 5 ? 'legendary' : best >= 3 ? 'epic' : 'rare');
@@ -582,11 +600,12 @@ class Game {
     }
     return out;
   }
-  give(rewards, title, big) {
+  give(rewards, title, big, silent) {
     const list = grant(this.st, rewards);
+    autoEquipArtifacts(this.st, artifactSlots(this.stats.vip));
     this.recalc();
-    this.ui.rewards(list, title, { big });
-    this.refreshAll();
+    if (silent) { this.ui.toast(title + ' : ' + list.map((r) => this.ui.rewardText(r)).join(', '), 'gold'); this.ui.renderGear(); this.ui.refresh(); }
+    else { this.ui.rewards(list, title, { big }); this.refreshAll(); }
     return list;
   }
   idleRate() { return idleRate(this.st, this.stats); }
@@ -635,7 +654,7 @@ class Game {
     const p = PRODUCTS[id];
     const st = this.st;
     if ((p.kind === 'once' && st.iap.bought[id]) || (p.kind === 'daily' && st.iap.daily[id]) || (p.kind === 'weekly' && st.iap.weekly[id])) { this.ui.toast('Déjà acheté'); return; }
-    if (id === 'lifetime' && st.iap.lifetime) return;
+    if (id === 'noads' && st.iap.noads) return;
     if (id === 'fund' && st.iap.fund) return;
     if (p.kind === 'pass' && st.iap.pass >= (id === 'pass_deluxe' ? 2 : 1)) return;
     if (st.settings.capCents && this.monthSpent() + p.price > st.settings.capCents) {
@@ -660,7 +679,7 @@ class Game {
     if (p.kind === 'weekly') st.iap.weekly[id] = true;
     if (p.kind === 'flash') st.iap.flash = null;
     if (id === 'monthly') { st.iap.monthlyUntil = Math.max(Date.now(), st.iap.monthlyUntil) + 30 * 864e5; rewards.gems = 300; st.daily.cardGems = true; }
-    if (id === 'lifetime') { st.iap.lifetime = true; rewards.gems = 1000; }
+    if (id === 'noads') st.iap.noads = true;
     if (id === 'fund') st.iap.fund = true;
     if (id === 'pass') st.iap.pass = Math.max(1, st.iap.pass);
     if (id === 'pass_deluxe') { st.iap.pass = 2; addPassXp(st, PASS_XP_PER_TIER * 10); rewards.yarn = 5000; }
@@ -745,25 +764,25 @@ class Game {
   onNewDay() {
     const st = this.st, g = {};
     if (st.iap.monthlyUntil > Date.now()) g.gems = (g.gems || 0) + 100;
-    if (st.iap.lifetime) g.gems = (g.gems || 0) + 80;
     if (g.gems && !st.daily.cardGems) { st.daily.cardGems = true; setTimeout(() => this.give(g, 'Gemmes quotidiennes des cartes'), 1500); }
   }
 
   // ------------------------------------------------------------------ pubs simulées
   watchAd(cb) {
     const st = this.st;
-    if (st.daily.ads >= AD_LIMIT) { this.ui.toast('Plus de vidéos aujourd\'hui', 'warn'); return; }
+    if (st.daily.ads >= this.adLimit()) { this.ui.toast('Plus de vidéos aujourd\'hui', 'warn'); return; }
     const done = () => { st.daily.ads++; bumpQuest(st, 'ad', 1); cb(); this.ui.refresh(); };
-    if (st.iap.lifetime) { done(); return; }
+    if (st.iap.noads) { done(); return; }
     let left = 3;
     const cnt = h('b.ad-count', null, String(left));
     const close = this.ui.modal({ title: 'Vidéo bonus', body: h('div.ad-fake', null, h('div.ad-screen', null, h('img', { src: this.costumeURL('galaxy'), alt: '' }), h('span', null, 'Votre publicité ici')), h('p', null, 'Récompense dans ', cnt, ' s'), h('p.muted.small', null, 'Simulation : intégrez une régie (AdMob, AppLovin…) pour de vraies vidéos.')), noClose: true });
     const iv = setInterval(() => { left--; cnt.textContent = String(left); if (left <= 0) { clearInterval(iv); close(); done(); } }, 1000);
   }
   grantAd(i) { this.give(AD_REWARDS[i], 'Bonus vidéo'); }
+  adLimit() { return this.st.iap.noads ? AD_LIMIT_NOADS : AD_LIMIT; }
 
   // ------------------------------------------------------------------ donjons / tour
-  combatDot() { return DUNGEONS.some((d) => this.st.dungeons[d.id].keys > 0) || this.st.arena.tickets > 0 || this.arenaDailyClaimable() || this.st.war.energy > 0 || tributeAvailable(this.st); }
+  combatDot() { return this.st.tower.floor <= 3 || (this.st.lairs.tickets > 0 && this.st.camp.best >= 10) || (!this.st.daily.towerDaily && this.st.tower.best > 0) || DUNGEONS.some((d) => this.st.dungeons[d.id].keys > 0) || this.st.arena.tickets > 0 || this.arenaDailyClaimable() || this.st.war.energy > 0 || tributeAvailable(this.st); }
   startDungeon(id) {
     const ds = this.st.dungeons[id];
     if (ds.keys <= 0) return;
@@ -774,16 +793,80 @@ class Game {
     this.startSpecial({ id, mode: 'dungeon', title: d.name, sub: 'Niveau ' + ds.lvl, banner: `${d.name} — niv. ${ds.lvl}`, onQuit: refund, onEnd: (win) => {
       if (win) { const r = dungeonReward(id, ds.lvl, this.st.camp.best); ds.lvl++; bumpQuest(this.st, 'dungeon', 1); this.give(r, 'Donjon terminé !'); this.maybeWildKitten(0.05); }
       else { refund(); this.defeatModal('Le donjon résiste… Votre clé a été rendue.'); }
-    } }, { mode: 'dungeon', waves: dungeonWaves(id, ds.lvl, d.enemy) }, id === 'gold' ? 'volcano' : id === 'yarn' ? 'neon' : 'autumn');
+    } }, { mode: 'dungeon', waves: dungeonWaves(id, ds.lvl, d.enemy), minions: [d.enemy] }, id === 'gold' ? 'desert' : id === 'yarn' ? 'factory' : 'jungle');
   }
   sweepDungeon(id) { const ds = this.st.dungeons[id]; if (ds.keys <= 0 || ds.lvl <= 1) return; ds.keys--; bumpQuest(this.st, 'dungeon', 1); this.give(dungeonReward(id, ds.lvl - 1, this.st.camp.best), 'Balayage'); }
   buyDungeonKey(id) { const ds = this.st.dungeons[id]; if (ds.buys >= VIP_PERKS[this.stats.vip].dungeonBuys) return; if (!this.spendGems(100 * (ds.buys + 1))) return; ds.buys++; ds.keys++; sfx('coin'); this.ui.refresh(); }
-  startTower() {
-    const f = this.st.tower.floor;
-    this.startSpecial({ mode: 'tower', title: 'Arbre à Chat', sub: 'Étage ' + f, banner: `Arbre à Chat — étage ${f}`, onEnd: (win) => {
-      if (win) { this.st.tower.floor++; this.give(towerReward(f), `Étage ${f} conquis !`, f % 10 === 0); }
-      else this.defeatModal('Ce gardien est trop fort pour le moment.');
-    } }, { mode: 'tower', waves: towerWaves(f) }, 'cosmos');
+  startTower(revive) {
+    const st = this.st, f = st.tower.floor;
+    const info = towerFloorInfo(f);
+    const tw = towerWaves(f, info.mods);
+    const buff = revive ? 0.5 : 0;
+    this.startSpecial({ mode: 'tower', title: 'Tour des Défis', sub: 'Étage ' + f + (info.mods.length ? ' · ' + info.mods.map((m) => m.name).join(' + ') : ''), banner: `Tour — étage ${f}${info.mods.length ? ' · ' + info.mods[0].name : ''}`, onEnd: (win) => {
+      if (win) {
+        st.tower.floor++;
+        st.tower.best = Math.max(st.tower.best, f);
+        bumpQuest(st, 'tower', 1);
+        const R = towerRewards(f);
+        const all = { ...R.base };
+        if (R.milestone) for (const k in R.milestone) all[k] = typeof R.milestone[k] === 'number' ? (all[k] || 0) + R.milestone[k] : R.milestone[k];
+        if (R.milestone) this.give(all, `Palier ${f} atteint !`, true);
+        else this.give(all, `Étage ${f} conquis !`, false, f % 5 !== 0);
+        this.checkTitles();
+      } else {
+        const body = h('div.col.center', null, h('p', null, `L'étage ${f} vous résiste…`), h('p.small.muted', null, 'Second souffle : réessayez tout de suite avec +50 % d\'ATQ pour cet essai.'));
+        this.ui.modal({ title: 'Défaite', body, buttons: [{ label: 'Second souffle', sub: `${icon('gems')} ${TOWER_REVIVE_GEMS}`, cls: 'purple', fn: () => { if (this.spendGems(TOWER_REVIVE_GEMS)) setTimeout(() => this.startTower(true), 50); } }, { label: 'Abandonner', cls: 'blue' }] });
+      }
+    } }, { mode: 'tower', ...tw, mods: info.mods, reviveBuff: buff }, tw.biome, tw.variant);
+  }
+  // Récompense quotidienne de la Tour : selon le record (remplace l'ancien balayage)
+  towerDailyInfo() {
+    const b = this.st.tower.best;
+    return { towerTokens: 20 + Math.floor(b * 0.8), artDust: 10 + Math.floor(b / 2), gold: Math.round(killGold(Math.max(0, this.st.camp.best - 5)) * (20 + b)) };
+  }
+  towerSweep() {
+    const st = this.st;
+    if (st.daily.towerDaily) { this.ui.toast('Déjà récupérée aujourd\'hui. Revenez demain !'); return; }
+    if (st.tower.best < 1) { this.ui.toast('Conquérez au moins un étage pour débloquer la récompense du jour.'); return; }
+    st.daily.towerDaily = true;
+    this.give(this.towerDailyInfo(), `Récompense du jour (record ${st.tower.best})`);
+  }
+  // ------------------------------------------------------------------ repaires de boss
+  lairList() {
+    const beaten = Math.floor(this.st.camp.best / 10);
+    return BIOMES.map((b, i) => ({ biome: b.id, name: b.name, ch: i + 1, B: BIOME_BOSS[b.id], open: beaten >= i + 1 }));
+  }
+  lairStage() { return Math.max(5, this.st.camp.best - 8); }
+  startLair(biome) {
+    const L = this.st.lairs;
+    if (L.tickets <= 0) { sfx('error'); this.ui.toast('Plus de tickets de repaire aujourd\'hui', 'warn'); return; }
+    const B = BIOME_BOSS[biome];
+    L.tickets--;
+    let refunded = false;
+    const refund = () => { if (!refunded) { refunded = true; L.tickets++; } };
+    const variant = this.era().variant;
+    const lw = lairWaves(biome, this.lairStage(), variant);
+    this.startSpecial({ mode: 'lair', title: 'Repaire', sub: B.name, banner: `Repaire — ${B.name}`, onQuit: refund, onEnd: (win) => {
+      if (win) {
+        const r = { [B.drop]: 1, gold: Math.round(killGold(this.lairStage()) * 30) };
+        if (Math.random() < 0.15) r.frags = 2 + Math.floor(Math.random() * 3);
+        bumpQuest(this.st, 'dungeon', 1);
+        this.give(r, `${B.name} vaincu !`);
+      } else { refund(); this.defeatModal('Le boss vous a repoussé… Votre ticket a été rendu.'); }
+    } }, { mode: 'lair', ...lw }, biome, variant);
+  }
+  buyLairTicket() {
+    const L = this.st.lairs;
+    if (L.buys >= VIP_PERKS[this.stats.vip].dungeonBuys) { this.ui.toast('Limite d\'achats atteinte : montez de niveau VIP pour en acheter plus', 'vip'); return; }
+    if (!this.spendGems(lairBuyCost(L.buys))) return;
+    L.buys++; L.tickets++; sfx('coin'); this.ui.refresh();
+  }
+  towerShopBuy(id) {
+    const st = this.st, a = TOWER_SHOP.find((x) => x.id === id), n = st.tower.shop[id] || 0;
+    if (n >= a.limit) return;
+    if (st.res.towerTokens < a.cost) { sfx('error'); this.ui.toast('Pas assez de jetons de défi', 'warn'); return; }
+    st.res.towerTokens -= a.cost; st.tower.shop[id] = n + 1;
+    this.give(a.rewards, 'Boutique de la Tour');
   }
   defeatModal(msg) {
     const body = h('div.col', null, h('p.center', null, msg), h('p.muted.small.center', null, 'Pour devenir plus fort : ouvrez des cartons, forgez votre équipement, fabriquez une panoplie et adoptez des chatons.'));
@@ -796,7 +879,9 @@ class Game {
     const tierSkills = SKILLS.filter((s) => s.mult && s.r <= Math.min(6, 2 + Math.floor(Math.log10(Math.max(10, power)) / 2)));
     const skills = [pick(tierSkills), pick(tierSkills)].filter((v, i, a) => a.indexOf(v) === i).map((s) => ({ ...s, lvl: 1, lm: 1 }));
     const kittens = loadout.kittens.map((id) => { const k = KITTEN_BY_ID[id]; return { id: k.id, name: k.name, el: k.el, r: k.r, look: k.look, mult: [0.25, 0.35, 0.5, 0.7, 1, 1.5, 2.3, 3.5, 5.5][k.r] }; });
-    return { name, appearance: loadout.ap, gear: loadout.gear, stats: { ...S, hp: S.hp * 1.05, crit: 10, critDmg: 60, combo: 4, counter: 3, dodge: 3, lifesteal: 0, stun: 0 }, skills, kittens, weaponColor: RCOL[loadout.gear.weapon.r], perks: {}, vip };
+    const auras = ['sparkle', 'flames', 'frost', 'thunder', 'shadow', 'rainbow', 'galaxy'];
+    const aura = vip >= 3 ? auras[Math.min(auras.length - 1, Math.floor(vip / 2))] : null;
+    return { name, appearance: loadout.ap, gear: loadout.gear, stats: { ...S, hp: S.hp * 1.05, crit: 10, critDmg: 60, combo: 4, counter: 3, dodge: 3, lifesteal: 0, stun: 0, kitDmg: 0 }, skills, kittens, weaponColor: RCOL[loadout.gear.weapon.r], perks: {}, vip, aura };
   }
   arenaBoard() { return arenaBoard(this.st, this.stats); }
   arenaOpponents() { return arenaOpponents(this.st, this.stats); }
@@ -883,6 +968,62 @@ class Game {
     this.give(a.rewards, 'Boutique de guerre', !!a.rewards.costume);
   }
 
+  // ------------------------------------------------------------------ artefacts
+  artifactPull(n) {
+    const st = this.st;
+    if (n === 1 && !st.daily.artFree) st.daily.artFree = true;
+    else if (!this.spendGems(n === 1 ? ARTIFACT_CHEST.cost1 : ARTIFACT_CHEST.cost10)) return;
+    const out = artifactChest(st, n);
+    autoEquipArtifacts(st, artifactSlots(this.stats.vip));
+    const best = Math.max(...out.map((o) => o.a.r));
+    sfx(best >= 6 ? 'legendary' : 'epic');
+    const body = h('div.summon-res', null, out.map((o, i) => h('div.sres', { cls: 'r' + o.a.r, style: { '--rc': RARITIES[o.a.r].color, '--rd': RARITIES[o.a.r].dark, animationDelay: i * 0.05 + 's' } }, h('span.sk-ic', { html: this.ui.artIcon(o.a) }), h('b', null, `${o.a.name} x${o.k}`), o.unlocked ? h('i.new-tag', null, 'DÉBLOQUÉ') : null)));
+    this.ui.modal({ title: 'Coffre d\'artefacts', body, buttons: [{ label: 'Encore x' + n, cls: 'gold', fn: () => { setTimeout(() => this.artifactPull(n), 60); } }, { label: 'OK', cls: 'blue' }], rays: best >= 6 ? RARITIES[best].color : null });
+    this.refreshAll();
+  }
+  artifactLevel(id, times) { const k = artifactLevelUp(this.st, id, times); if (!k) { sfx('error'); this.ui.toast('Pas assez de poussière ou d\'or', 'warn'); return; } sfx('equip'); this.refreshAll(); }
+  artifactStar(id) { if (!artifactStarUp(this.st, id)) { sfx('error'); return; } sfx('legendary'); this.ui.toast(`${ARTIFACT_BY_ID[id].name} : ★ ${this.st.artifacts.owned[id].stars}`, 'gold'); this.refreshAll(); }
+  equipArtifact(id) {
+    const st = this.st, slots = artifactSlots(this.stats.vip), eq = st.artifacts.equipped;
+    if (eq.slice(0, slots).includes(id)) return;
+    let i = eq.slice(0, slots).findIndex((x) => !x);
+    if (i < 0) i = slots - 1;
+    eq[i] = id; sfx('equip'); this.refreshAll();
+  }
+  unequipArtifact(i) { this.st.artifacts.equipped[i] = null; this.refreshAll(); }
+
+  // ------------------------------------------------------------------ style (cosmétiques)
+  setAura(id) { this.st.cos.aura = this.st.cos.aura === id ? null : id; sfx('meow'); this.refreshAll(); }
+  setTitle(id) { this.st.cos.title = id; sfx('click'); this.refreshAll(); }
+  setFrame(id) { this.st.cos.frame = id; sfx('click'); this.ui.renderGear(); this.refreshAll(); }
+  buyStyle(i) {
+    const it = STYLE_SHOP[i], st = this.st;
+    const owned = it.kind === 'aura' ? st.cos.auras.includes(it.id) : it.kind === 'frame' ? st.cos.frames.includes(it.id) : st.costumes.owned.includes(it.id);
+    if (owned) return;
+    if (!this.spendGems(it.gems)) return;
+    this.give({ [it.kind]: it.id }, 'Nouveau style !', true);
+  }
+  checkTitles() {
+    const st = this.st;
+    const has = (k) => Object.values(st.kittens.owned).length >= k;
+    const conds = {
+      claw: st.camp.best >= 20, ratHunter: st.stats.kills >= 1000, climber: st.tower.best >= 25, artisan: st.artisan.lvl >= 20,
+      forgemage: [...Object.values(st.gear), ...st.bag].some((x) => x && (x.upg || 0) >= 10), tamer: has(25), baron: st.stats.sold >= 100,
+      conqueror: st.tower.best >= 100, nightmare: this.era().e >= 2, infernal: this.era().e >= 3, unstoppable: st.tower.best >= 250,
+      emperor: this.stats.vip >= 15, primordial: Object.keys(st.kittens.owned).some((id) => KITTEN_BY_ID[id] && KITTEN_BY_ID[id].r >= 8), arenaLegend: st.arena.best <= 3,
+    };
+    for (const id in conds) if (conds[id] && !st.cos.titles.includes(id)) { st.cos.titles.push(id); this.ui.toast(`Nouveau titre : « ${TITLE_BY_ID[id].name} » !`, 'gold'); sfx('levelup'); }
+  }
+
+  // ------------------------------------------------------------------ alchimie
+  brew(id, n) { const k = brewPotion(this.st, id, n); if (!k) { sfx('error'); this.ui.toast('Ingrédients manquants', 'warn'); return; } sfx('heal'); this.ui.toast(`+${k} ${POTION_BY_ID[id].name}`, 'gold'); this.ui.refresh(); }
+  drinkPotion(id) { if (!usePotion(this.st, id)) return; sfx('heal'); this.ui.toast(`${POTION_BY_ID[id].name} : ${POTION_BY_ID[id].desc}`, 'gold'); this.refreshAll(); }
+  transmuteRes(id) { const out = transmute(this.st, id); if (!out) { sfx('error'); this.ui.toast('Pas assez de ressources', 'warn'); return; } sfx('legendary'); this.ui.toast(`Transmutation : +1 ${out.name} !`, 'gold'); this.ui.refresh(); }
+
+  // ------------------------------------------------------------------ fidélité (recharge cumulée)
+  loyaltyClaimable() { return LOYALTY.some((l, i) => this.st.iap.spent >= l.cents && !this.st.loyalty.includes(i)); }
+  claimLoyalty(i) { const st = this.st, L = LOYALTY[i]; if (st.iap.spent < L.cents || st.loyalty.includes(i)) return; st.loyalty.push(i); this.give(L.rewards, 'Récompense de fidélité', true); }
+
   // ------------------------------------------------------------------ paramètres
   applyQuality() {
     const q = this.st.settings.quality === 'auto' ? this.autoQ.level : this.st.settings.quality;
@@ -966,6 +1107,7 @@ class Game {
         if (sold.length) sfx('coin');
       }
       if (this.sideT % 60 === 0) this.handleWarEvents(warTick(this.st));
+      if (this.sideT % 7 === 0) this.checkTitles();
       this.tutoCheck();
     }
   }

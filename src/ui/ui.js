@@ -2,8 +2,10 @@
 import { h, fmt, fmtTime, fmtPct } from '../util.js';
 import { icon, injectIconDefs } from './icons.js';
 import { RARITIES, SLOTS, SUBSTATS, xpToNext, biomeForChapter, BOX_MAX_LEVEL, boxOdds } from '../config.js';
-import { RES_BY_ID, SET_BY_ID, RELIC_BY_ID, COSTUME_BY_ID, KITTEN_BY_ID, ELEMENTS } from '../content.js';
-import { itemMain, itemPower, itemName, SKILL_BY_ID } from '../stats.js';
+import { RES_BY_ID, SET_BY_ID, RELIC_BY_ID, KITTEN_BY_ID, ELEMENTS } from '../content.js';
+import { ARTIFACT_BY_ID, AURA_BY_ID, TITLE_BY_ID, FRAME_BY_ID, towerFloorInfo } from '../content3.js';
+import { monsterPortrait } from '../gfx/bestiary.js';
+import { itemMain, itemPower, itemName, SKILL_BY_ID, COSTUME_BY_ID } from '../stats.js';
 import { idlePending, idleCapH, boxUpgradeInfo, keepable } from '../economy.js';
 import { itemIconURL } from '../gfx/gear.js';
 import { catPortraitURL, catFullURL } from '../gfx/cat.js';
@@ -13,6 +15,7 @@ import { PANELS } from './panels.js';
 export const RES_LABEL = {
   gold: 'Or', gems: 'Gemmes', yarn: 'Pelotes', feathers: 'Plumes', eggs: 'Paniers', arenaCoins: 'Médailles', warCoins: 'Écussons', speedMin: 'Accélérateur', xp: 'XP',
   stone: 'Pierre de protection', scroll: 'Parchemin de chance', clover: 'Trèfle (butin x2)', milk: 'Lait doré', relicKeys: 'Clés de relique',
+  towerTokens: 'Jetons de défi', frags: 'Fragments d\'artefact',
 };
 export function rarityName(r) { return RARITIES[r].name; }
 export function slotName(id) { return SLOTS.find((s) => s.id === id).name; }
@@ -63,10 +66,9 @@ export class UI {
       })),
     );
     this.stageInfo = h('div.stage-info', null, h('b.stage-name'), h('span.stage-biome'), h('div.waves'));
+    this.strip = h('div.strip');
     this.bossBar = h('div.boss-bar', { hidden: true }, h('b.bname'), h('div.btrack', null, h('i.bfill2'), h('i.bfill')), h('span.bhp'));
     this.modeBanner = h('div.mode-banner', { hidden: true }, h('b'), h('button.btn.sm.red', { onclick: () => g.leaveSpecial() }, 'Quitter'));
-    this.sideL = h('div.side.left');
-    this.sideR = h('div.side.right');
     this.lootFeed = h('div.loot-feed');
     this.skillRow = h('div.skill-row');
     this.speedBtn = h('button.ctrl.speed', { onclick: () => g.cycleSpeed() }, 'x1');
@@ -75,7 +77,11 @@ export class UI {
     this.idleBtn = h('button.idle-chest', { onclick: () => this.showIdle() }, h('span', { html: icon('chest') }), h('i.idle-fill'), h('b.idle-t'));
     const ctrls = h('div.ctrls', null, this.idleBtn, this.skillRow, h('div.ctrl-r', null, this.challengeBtn, this.autoChBtn, this.speedBtn));
     this.cutinEl = h('div.cutin', { hidden: true });
-    this.stageEl.append(hud, this.stageInfo, this.bossBar, this.modeBanner, this.sideL, this.sideR, this.lootFeed, ctrls, this.cutinEl);
+    this.bossCard = h('div.boss-card', { hidden: true });
+    this.tutoEl = h('div.tuto', { hidden: true }, h('i.tuto-ring'), h('b.tuto-txt'));
+    // v3 : tout ce qui s'affiche en combat s'empile dans le HUD (plus rien ne masque les combattants)
+    hud.append(this.strip, this.modeBanner, this.stageInfo, this.bossBar, this.lootFeed);
+    this.stageEl.append(hud, ctrls, this.cutinEl, this.bossCard);
 
     this.home = h('div.home');
     this.gearL = h('div.gear-col');
@@ -95,8 +101,7 @@ export class UI {
     this.modalRoot = h('div.modal-root');
     this.toasts = h('div.toasts');
     this.flyLayer = h('div.fly-layer');
-    this.handEl = h('div.tuto-hand', { hidden: true }, h('span', null, '👆'), h('b'));
-    app.append(this.stageEl, this.home, this.sheetEl, this.nav, this.modalRoot, this.toasts, this.flyLayer, this.handEl);
+    app.append(this.stageEl, this.home, this.sheetEl, this.nav, this.modalRoot, this.toasts, this.flyLayer, this.tutoEl);
   }
 
   buildBox() {
@@ -158,6 +163,7 @@ export class UI {
     this.autoChBtn.hidden = !!sp;
     this.autoChBtn.classList.toggle('on', st.camp.auto);
     this.setText('chal', this.challengeBtn, g.nextIsBoss() ? 'DÉFIER LE BOSS' : 'DÉFIER');
+    this.placeTuto();
   }
   updateStageInfo() {
     const g = this.g, st = g.st;
@@ -165,7 +171,7 @@ export class UI {
     const name = this.stageInfo.querySelector('.stage-name');
     const bio = this.stageInfo.querySelector('.stage-biome');
     if (sp) { name.textContent = sp.title; bio.textContent = sp.sub || ''; }
-    else { name.textContent = `${st.camp.ch}-${st.camp.st}`; bio.textContent = biomeForChapter(st.camp.ch).name + (st.camp.auto ? '' : ' · Entraînement'); }
+    else { const er = g.era(); name.textContent = `${st.camp.ch}-${st.camp.st}`; bio.textContent = biomeForChapter(st.camp.ch).name + (er.e ? ' · ' + er.name : '') + (st.camp.auto ? '' : ' · Farm'); }
     const w = this.stageInfo.querySelector('.waves');
     const n = g.battle.enc && g.battle.enc.waves ? g.battle.enc.waves.length : 0;
     const key = n + ':' + g.battle.wave;
@@ -186,6 +192,7 @@ export class UI {
       (i < 5 ? this.gearL : this.gearR).append(b);
     });
     this.avatarImg.src = this.g.portrait();
+    this.avatarImg.parentNode.dataset.frame = this.g.st.cos.frame || 'basic';
   }
   renderSkillRow() {
     const b = this.g.battle;
@@ -214,17 +221,17 @@ export class UI {
   }
   renderSide() {
     const g = this.g, st = g.st;
-    const L = [], R = [];
-    const btn = (ic, label, fn, o = {}) => h('button.side-btn', { onclick: fn, cls: o.cls || '' }, h('span', { html: icon(ic) }), h('b', null, label), o.dot ? h('i.dot') : null, o.timer ? h('small', { dataset: { until: o.timer } }) : null);
-    L.push(btn('quest', 'Quêtes', () => this.open('quests'), { dot: g.questsClaimable() }));
-    L.push(btn('pass', 'Passe', () => this.open('shop', 'pass'), { dot: g.passClaimable() }));
-    L.push(btn('tv', 'Bonus', () => this.open('ads'), { dot: st.daily.ads < 8 }));
-    if (st.iap.firstRecharge !== 2) R.push(btn('gift', st.iap.firstRecharge ? 'Réclamer !' : '1er achat', () => this.open('firstRecharge'), { cls: 'glow', dot: st.iap.firstRecharge === 1 }));
-    if (st.iap.flash && st.iap.flash.until > Date.now()) R.push(btn('flash', 'Flash', () => g.showProduct(st.iap.flash.id, true), { cls: 'glow-o', timer: st.iap.flash.until }));
-    R.push(btn('rel', 'Reliques', () => this.open('shop', 'relics'), { cls: 'glow-r' }));
-    R.push(btn('crown', 'VIP', () => this.open('shop', 'vip'), { dot: g.vipGiftClaimable() }));
-    this.sideL.replaceChildren(...L);
-    this.sideR.replaceChildren(...R);
+    const items = [];
+    const btn = (ic, label, fn, o = {}) => h('button.strip-btn', { onclick: fn, cls: o.cls || '' }, h('span', { html: ic.startsWith('<') ? ic : icon(ic) }), h('b', null, label), o.dot ? h('i.dot') : null, o.timer ? h('small', { dataset: { until: o.timer } }) : null);
+    items.push(btn('quest', 'Quêtes', () => this.open('quests'), { dot: g.questsClaimable() }));
+    items.push(btn('tower', 'Tour', () => this.open('combat', 'tower'), { dot: st.tower.floor <= 3 }));
+    if (st.iap.firstRecharge !== 2) items.push(btn('gift', st.iap.firstRecharge ? 'Réclamer' : '1er achat', () => this.open('firstRecharge'), { cls: 'glow', dot: st.iap.firstRecharge === 1 }));
+    if (st.iap.flash && st.iap.flash.until > Date.now()) items.push(btn('flash', 'Flash', () => g.showProduct(st.iap.flash.id, true), { cls: 'glow-o', timer: st.iap.flash.until }));
+    items.push(btn('pass', 'Passe', () => this.open('shop', 'pass'), { dot: g.passClaimable() }));
+    items.push(btn('rel', 'Reliques', () => this.open('shop', 'relics'), { cls: 'glow-r' }));
+    items.push(btn('crown', 'Fidélité', () => this.open('shop', 'loyalty'), { dot: g.loyaltyClaimable() }));
+    items.push(btn('tv', 'Bonus', () => this.open('ads'), { dot: st.daily.ads < g.adLimit() }));
+    this.strip.replaceChildren(...items);
     const dot = (id, on) => { this.navBtns[id].querySelector('.dot').hidden = !on; };
     dot('hero', st.res.feathers >= 1 || g.anyLevelUp('skills') || g.trainAffordable());
     dot('kittens', st.res.eggs >= 1 || g.anyLevelUp('kittens'));
@@ -357,10 +364,35 @@ export class UI {
     if (k === 'skill') { const s = SKILL_BY_ID[r.v]; return h('div.rchip.big', { cls: 'r' + s.r }, h('span.sk-ic', { html: icon('sk_' + s.id) }), h('b', null, s.name), h('small', null, RARITIES[s.r].name)); }
     if (k === 'relic') { const R = RELIC_BY_ID[r.v]; return h('div.rchip.big', { cls: 'r8' }, h('img', { src: itemIconURL(R.slot, R.base, 8), alt: '' }), h('b', null, R.name), h('small', null, 'Relique')); }
     if (k === 'look') return h('div.rchip.big', { cls: 'r8' }, h('img', { src: catPortraitURL({ fur: 'galaxie', pattern: 'galaxy', eye: 'galaxie' }, {}, 96), alt: '' }), h('b', null, 'Pelage Galaxie'), h('small', null, 'Apparence'));
+    if (k.startsWith('frag:')) { const A = ARTIFACT_BY_ID[k.slice(5)]; return h('div.rchip', { cls: 'r' + A.r }, h('span', { html: this.artIcon(A) }), h('b', null, 'x' + r.v), h('small', null, A.name)); }
+    if (k === 'aura') { const A = AURA_BY_ID[r.v]; return h('div.rchip.big', { cls: 'r' + A.r }, h('span.aura-prev', { style: { '--a1': A.colors[0], '--a2': A.colors[1] || A.colors[0] } }), h('b', null, A.name), h('small', null, 'Aura')); }
+    if (k === 'title') { const T = TITLE_BY_ID[r.v]; return h('div.rchip.big', { cls: 'r' + T.r }, h('b.title-tag', { cls: 'r' + T.r }, T.name), h('small', null, 'Titre')); }
+    if (k === 'frame') { const F = FRAME_BY_ID[r.v]; return h('div.rchip.big', { cls: 'r' + F.r }, h('span.frame-prev', { dataset: { frame: F.id } }, h('img', { src: this.g.portrait(), alt: '' })), h('b', null, F.name), h('small', null, 'Cadre')); }
+    if (k === 'frags') return h('div.rchip', { cls: 'r5' }, h('span', { html: icon('rel') }), h('b', null, fmt(r.v)), h('small', null, 'Fragments'));
     const R = RES_BY_ID[k];
     if (R) return h('div.rchip', { cls: 'r' + R.r }, h('span', { html: resIcon(k) }), h('b', null, fmt(r.v)), h('small', null, R.name));
     const label = k === 'speedMin' ? fmtTime(r.v * 60) : fmt(r.v);
     return h('div.rchip', null, h('span', { html: icon(k) }), h('b', null, label), h('small', null, RES_LABEL[k] || k));
+  }
+  rewardText(r) {
+    const k = r.k;
+    if (k.startsWith('frag:')) return `${r.v} × ${ARTIFACT_BY_ID[k.slice(5)].name}`;
+    if (RES_BY_ID[k]) return `${fmt(r.v)} ${RES_BY_ID[k].name}`;
+    if (k === 'aura') return 'Aura ' + AURA_BY_ID[r.v].name;
+    if (k === 'title') return 'Titre ' + TITLE_BY_ID[r.v].name;
+    return `${fmt(r.v)} ${(RES_LABEL[k] || k).toLowerCase()}`;
+  }
+  artIcon(A) {
+    return `<i class="ic res-ic art-ic r${A.r}" style="color:${A.color}">${icon('r_' + A.shape).replace(/^<i class="ic ">|<\/i>$/g, '')}</i>`;
+  }
+  bossIntro(b, variant) {
+    const el = this.bossCard;
+    el.innerHTML = '';
+    el.append(h('img', { src: monsterPortrait(b.bossKind || b.kind, variant), alt: '' }), h('div', null, h('small', null, { tower: 'GARDIEN DE LA TOUR', lair: 'REPAIRE DE BOSS', dungeon: 'GARDIEN DU DONJON' }[this.g.battle.mode] || 'BOSS DE LA MAP'), h('b', null, b.name), h('em', null, '★★★ Danger')));
+    el.hidden = false;
+    el.classList.remove('play'); void el.offsetWidth; el.classList.add('play');
+    clearTimeout(this.bossT);
+    this.bossT = setTimeout(() => { el.hidden = true; }, 2200);
   }
   rewards(list, title = 'Récompenses !', opts = {}) {
     if (!list || !list.length) return;
@@ -369,6 +401,8 @@ export class UI {
     this.modal({ title, body, buttons: [{ label: 'Super !', cls: 'green' }], rays: opts.big ? '#ffd23f' : '#ffffff', cls: 'reward-modal' });
   }
   toast(msg, kind = '') {
+    // pas de doublons empilés (ex. plusieurs butins identiques d'affilée)
+    for (const o of this.toasts.children) if (o.textContent === msg && !o.classList.contains('out')) return;
     const t = h('div.toast', { cls: kind }, msg);
     this.toasts.append(t);
     setTimeout(() => t.classList.add('out'), 2200);
@@ -378,13 +412,13 @@ export class UI {
   loot(drops) {
     for (const id in drops) {
       const R = RES_BY_ID[id];
-      const row = h('div.loot', { cls: 'r' + R.r }, h('span', { html: resIcon(id) }), h('b', null, '+' + drops[id]), h('small', null, R.name));
+      const row = h('div.loot', { cls: 'r' + R.r, title: R.name }, h('span', { html: resIcon(id) }), h('b', null, '+' + drops[id]), R.r >= 3 ? h('small', null, R.name) : null);
       this.lootFeed.prepend(row);
       if (R.r >= 4) { row.classList.add('rare'); sfx(R.r >= 5 ? 'legendary' : 'epic'); if (R.r >= 5) this.toast(`Butin ${RARITIES[R.r].name} : ${R.name} !`, 'gold'); }
       setTimeout(() => row.classList.add('out'), 2600);
       setTimeout(() => row.remove(), 3000);
     }
-    while (this.lootFeed.children.length > 3) this.lootFeed.lastChild.remove();
+    while (this.lootFeed.children.length > 4) this.lootFeed.lastChild.remove();
   }
   fly(type, x, y, n = 3) {
     const tgt = this.app.querySelector(`.res[data-res="${type}"]`) || this.app.querySelector('.res');
@@ -471,11 +505,29 @@ export class UI {
     this.modal({ title: 'Carton magique', body, buttons: btns });
   }
   tutorial(target, text) {
-    if (!target) { this.handEl.hidden = true; return; }
-    const r = target.getBoundingClientRect(), b = this.app.getBoundingClientRect();
-    this.handEl.hidden = false;
-    this.handEl.style.transform = `translate(${r.left - b.left + r.width / 2 - 20}px, ${r.top - b.top + r.height * 0.55}px)`;
-    this.handEl.lastChild.textContent = text;
+    this.tutoTarget = target;
+    this.tutoText = text;
+    this.placeTuto();
+  }
+  placeTuto() {
+    const el = this.tutoEl, t = this.tutoTarget;
+    if (!t || !t.isConnected || t.offsetParent === null || this.modalRoot.children.length) { el.hidden = true; return; }
+    const r = t.getBoundingClientRect(), b = this.app.getBoundingClientRect();
+    if (r.width === 0) { el.hidden = true; return; }
+    el.hidden = false;
+    const x = r.left - b.left, y = r.top - b.top;
+    el.style.left = x + 'px'; el.style.top = y + 'px'; el.style.width = r.width + 'px'; el.style.height = r.height + 'px';
+    const txt = el.lastChild;
+    if (txt.textContent !== this.tutoText) txt.textContent = this.tutoText;
+    el.classList.toggle('below', y < 120);
+    // la bulle reste toujours dans l'écran (cibles collées aux bords : onglets, barre d'icônes)
+    const cur = parseFloat(txt.style.marginLeft) || 0;
+    const tr = txt.getBoundingClientRect();
+    const natL = tr.left - cur, natR = tr.right - cur;
+    let shift = 0;
+    if (natL < b.left + 6) shift = b.left + 6 - natL;
+    else if (natR > b.right - 6) shift = b.right - 6 - natR;
+    if (Math.abs(shift - cur) > 0.5) { txt.style.marginLeft = shift + 'px'; txt.style.setProperty('--tx', shift + 'px'); }
   }
 }
 

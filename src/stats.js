@@ -3,8 +3,11 @@ import {
   heroBase, SLOTS, SLOT_BY_ID, SUBSTAT_KEYS, SUBSTATS, SKILLS, SKILL_PASSIVE_ATK, VIP_PERKS, vipLevel, RARITY_MULT, GEAR_BASE, STAT_GROWTH, TIER_SUFFIX,
 } from './config.js';
 import {
-  KITTEN_BY_ID, KITTEN_EQUIP_ATK, KITTEN_OWN_HP, KITTEN_BONUS_VAL, kittenLevelMult, COSTUMES, COSTUME_BY_ID, SET_BY_ID, RELIC_BY_ID, FORGE_BONUS,
+  KITTEN_BY_ID, KITTEN_EQUIP_ATK, KITTEN_OWN_HP, KITTEN_BONUS_VAL, kittenLevelMult, COSTUMES as COSTUMES2, SET_BY_ID, RELIC_BY_ID, FORGE_BONUS,
 } from './content.js';
+import { COSTUMES3, ARTIFACT_BY_ID, artifactBonus, artifactSlots, AURA_BY_ID, TITLE_BY_ID, FRAME_BY_ID } from './content3.js';
+const COSTUMES = [...COSTUMES2, ...COSTUMES3];
+const COSTUME_BY_ID = Object.fromEntries(COSTUMES.map((c) => [c.id, c]));
 
 export const SKILL_BY_ID = Object.fromEntries(SKILLS.map((s) => [s.id, s]));
 export { KITTEN_BY_ID, COSTUME_BY_ID };
@@ -65,7 +68,7 @@ export function computeStats(st) {
   const sub = Object.fromEntries(SUBSTAT_KEYS.map((k) => [k, 0]));
   sub.critDmg = 50;
   sub.crit = 5;
-  let goldPct = 0;
+  let goldPct = 0, kitDmg = 0;
   const perksOn = {};
 
   for (const s of SLOTS) {
@@ -81,6 +84,7 @@ export function computeStats(st) {
       if (k === 'atk') atkPct += fx[k];
       else if (k === 'hp') hpPct += fx[k];
       else if (k === 'gold') goldPct += fx[k];
+      else if (k === 'kitDmg') kitDmg += fx[k];
       else if (sub[k] != null) sub[k] += fx[k];
     }
   };
@@ -124,6 +128,28 @@ export function computeStats(st) {
     if (c.critDmg) sub.critDmg += c.critDmg;
     if (c.dodge) sub.dodge += c.dodge;
   }
+  // artefacts équipés
+  const aSlots = artifactSlots(vip);
+  for (let i = 0; i < aSlots; i++) {
+    const id = (st.artifacts && st.artifacts.equipped[i]) || null;
+    const o = id && st.artifacts.owned[id];
+    if (!o || o.stars < 0) continue;
+    const A = ARTIFACT_BY_ID[id];
+    addFx({ [A.stat]: artifactBonus(A, o.lvl, o.stars) });
+  }
+  // collection de cosmétiques (chaque pièce possédée compte)
+  if (st.cos) {
+    for (const id of st.cos.auras) { const a = AURA_BY_ID[id]; if (a) atkPct += a.atk; }
+    for (const id of st.cos.titles) { const t = TITLE_BY_ID[id]; if (t) hpPct += t.hp; }
+    for (const id of st.cos.frames) { const f = FRAME_BY_ID[id]; if (f) sub.luck += f.luck; }
+  }
+  // potions et boosts temporaires
+  const now = Date.now(), B = st.boost || {};
+  if (B.atkUntil > now) atkPct += 30;
+  if (B.hpUntil > now) hpPct += 30;
+  if (B.royalUntil > now) { atkPct += 60; hpPct += 60; }
+  if (B.goldUntil > now) goldPct += 100;
+  if (B.luckUntil > now) sub.luck += 100;
   atkPct += perks.stat; hpPct += perks.stat;
   sub.luck += perks.luck;
 
@@ -132,7 +158,7 @@ export function computeStats(st) {
   def *= 1 + defPct / 100;
   for (const k of SUBSTAT_KEYS) sub[k] = Math.min(sub[k], SUBSTATS[k].cap);
 
-  const out = { atk, hp, def, ...sub, atkPct, hpPct, goldPct, vip, perks: perksOn, setBonus };
+  const out = { atk, hp, def, ...sub, atkPct, hpPct, goldPct, kitDmg, vip, perks: perksOn, setBonus };
   out.power = powerOf(out);
   return out;
 }
